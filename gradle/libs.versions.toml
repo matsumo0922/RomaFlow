@@ -32,26 +32,26 @@ kmpPurchaseCommon = "14.0.2"
 adaptive = "1.2.0"
 
 # AndroidX
-androidxCore = "1.17.0"
+androidxCore = "1.18.0"
 androidxCoreSplash = "1.2.0"
 androidxAppCompat = "1.7.1"
-androidxActivity = "1.12.2"
+androidxActivity = "1.13.0"
 androidxFragment = "1.8.9"
 androidxDataStore = "1.2.1"
-androidxAnnotation = "1.9.1"
+androidxAnnotation = "1.10.0"
 androidxRoom = "2.8.4"
 androidxSqlite = "2.6.2"
 
 # Google
 playReview = "2.0.2"
 playUpdate = "2.1.0"
-playServiceAds = "24.9.0"
+playServiceAds = "25.3.0"
 ksp = "2.3.9"
 gms = "4.4.4"
 
 # Firebase
-firebase = "34.7.0"
-firebaseCrashlytics = "3.0.6"
+firebase = "34.14.1"
+firebaseCrashlytics = "3.0.7"
 
 # koin
 koin = "4.2.1"
