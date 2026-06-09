@@ -2,10 +2,17 @@
 
 RomaFlow IME is an experimental Japanese input method that lets users write in romaji first and convert the full text into natural Japanese afterward.
 
-The project is planned as a Kotlin Multiplatform codebase:
+The project is a Kotlin Multiplatform codebase based on `matsumo0922/kmp-template`.
 
-- Android IME first
-- macOS input method next
-- Shared conversion logic in Kotlin Multiplatform
-- Native platform code only where each operating system requires it
+- App name: RomaFlow
+- Android application ID: `me.matsumo.romaflow`
+- Kotlin package name: `me.matsumo.romaflow`
+- Android first, with platform-specific IME code added on top of the shared KMP modules
+- macOS input method support planned next, with native host code calling shared Kotlin logic
 
+## Verification
+
+```sh
+./gradlew detekt
+./gradlew :composeApp:assembleDebug
+```
