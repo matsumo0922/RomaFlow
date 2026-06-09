@@ -61,3 +61,4 @@ make install-inputmethod
 ```
 
 `RomaFlowInputMethod` is installed as `~/Library/Input Methods/RomaFlow.app`.
+The install target signs the app bundle and registers it with macOS Text Input Sources.

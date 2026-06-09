@@ -8,6 +8,7 @@ INPUT_METHOD_PRODUCT_NAME ?= RomaFlow.app
 LEGACY_INPUT_METHOD_PRODUCT_NAME ?= RomaFlow.inputmethod
 INPUT_METHOD_INSTALL_DIR ?= $(HOME)/Library/Input Methods
 INPUT_METHOD_CODESIGN_IDENTITY ?= -
+INPUT_METHOD_BUNDLE_ID ?= me.matsumo.inputmethod.RomaFlow
 
 generate:
 	xcodegen generate --spec macosApp/project.yml
@@ -43,7 +44,7 @@ install-inputmethod:
 	installed_path="$$install_dir/$(INPUT_METHOD_PRODUCT_NAME)"; \
 	xattr -cr "$$installed_path"; \
 	codesign --force --deep --sign "$(INPUT_METHOD_CODESIGN_IDENTITY)" "$$installed_path"; \
-	killall TextInputMenuAgent 2>/dev/null || true; \
+	swift tools/register_input_method.swift "$$installed_path" "$(INPUT_METHOD_BUNDLE_ID)"; \
 	echo "Installed $$source_path"; \
 	echo "Signed $$installed_path"; \
-	echo "Reloaded TextInputMenuAgent"
+	echo "Registered $$installed_path"

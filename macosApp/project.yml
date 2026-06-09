@@ -59,7 +59,7 @@ targets:
       - sdk: Carbon.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: me.matsumo.romaflow.inputmethod
+        PRODUCT_BUNDLE_IDENTIFIER: me.matsumo.inputmethod.RomaFlow
         PRODUCT_NAME: RomaFlow
         WRAPPER_EXTENSION: app
     info:
@@ -70,13 +70,16 @@ targets:
         CFBundleVersion: "1"
         LSBackgroundOnly: true
         LSMinimumSystemVersion: "14.0"
+        TISInputSourceID: me.matsumo.inputmethod.RomaFlow
+        TISIntendedLanguage: ja
         InputMethodConnectionName: RomaFlowInputMethod_Connection
         InputMethodServerControllerClass: RomaFlowInputController
+        InputMethodServerDelegateClass: RomaFlowInputController
         tsInputMethodIconFileKey: icon.pdf
         ComponentInputModeDict:
           tsInputModeListKey:
             com.apple.inputmethod.Japanese:
-              TISInputSourceID: me.matsumo.romaflow.inputmethod.Japanese
+              TISInputSourceID: me.matsumo.inputmethod.RomaFlow.Japanese
               TISIntendedLanguage: ja
               tsInputModeDefaultStateKey: true
               tsInputModeIsVisibleKey: true
@@ -84,12 +87,10 @@ targets:
               tsInputModeScriptKey: smJapanese
           tsVisibleInputModeOrderedArrayKey:
             - com.apple.inputmethod.Japanese
-        TISIntendedLanguage: ja
         tsInputMethodCharacterRepertoireKey:
           - Latn
           - Hira
           - Kana
-          - Jpan
 
 schemes:
   RomaFlowHarness:
