@@ -19,4 +19,10 @@ kotlin {
         moduleName = "RomaFlowImeCore"
         flattenPackage = "me.matsumo.romaflow.core.ime"
     }
+
+    sourceSets {
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
+    }
 }
