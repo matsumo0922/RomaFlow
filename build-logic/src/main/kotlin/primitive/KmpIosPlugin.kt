@@ -15,7 +15,7 @@ class KmpIosPlugin : Plugin<Project> {
                     iosSimulatorArm64(),
                 ).forEach { iosTarget ->
                     iosTarget.binaries.framework {
-                        baseName = "composeApp"
+                        baseName = "shared"
                         isStatic = true
                     }
                 }

@@ -6,11 +6,11 @@ plugins {
     id("matsumo.primitive.detekt")
 }
 
-android {
-    namespace = "me.matsumo.romaflow.core.billing"
-}
-
 kotlin {
+    android {
+        namespace = "me.matsumo.romaflow.core.billing"
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(project(":core:common"))

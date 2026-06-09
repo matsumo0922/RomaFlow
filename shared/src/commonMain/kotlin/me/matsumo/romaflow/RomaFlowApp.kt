@@ -14,7 +14,7 @@ import me.matsumo.romaflow.core.ui.theme.RomaFlowTheme
 
 @OptIn(DependsOnGoogleMobileAds::class, DependsOnGoogleUserMessagingPlatform::class)
 @Composable
-internal fun RomaFlowApp(
+fun RomaFlowApp(
     setting: AppSetting,
     modifier: Modifier = Modifier,
 ) {

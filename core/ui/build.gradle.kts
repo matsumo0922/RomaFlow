@@ -7,11 +7,11 @@ plugins {
     id("matsumo.primitive.detekt")
 }
 
-android {
-    namespace = "me.matsumo.romaflow.core.ui"
-}
-
 kotlin {
+    android {
+        namespace = "me.matsumo.romaflow.core.ui"
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(project(":core:model"))

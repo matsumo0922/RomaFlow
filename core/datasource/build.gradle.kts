@@ -7,11 +7,11 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-android {
-    namespace = "me.matsumo.romaflow.core.datasource"
-}
-
 kotlin {
+    android {
+        namespace = "me.matsumo.romaflow.core.datasource"
+    }
+
     sourceSets {
         androidMain.dependencies {
             implementation(libs.androidx.datastore)

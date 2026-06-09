@@ -14,5 +14,5 @@ The project is a Kotlin Multiplatform codebase based on `matsumo0922/kmp-templat
 
 ```sh
 ./gradlew detekt
-./gradlew :composeApp:assembleDebug
+./gradlew :androidApp:assembleDebug
 ```

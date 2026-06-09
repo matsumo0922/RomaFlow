@@ -7,11 +7,11 @@ plugins {
     id("matsumo.primitive.detekt")
 }
 
-android {
-    namespace = "me.matsumo.romaflow.feature.billing"
-}
-
 kotlin {
+    android {
+        namespace = "me.matsumo.romaflow.feature.billing"
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(project(":core:common"))

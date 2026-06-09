@@ -6,11 +6,11 @@ plugins {
     id("matsumo.primitive.detekt")
 }
 
-android {
-    namespace = "me.matsumo.romaflow.core.common"
-}
-
 kotlin {
+    android {
+        namespace = "me.matsumo.romaflow.core.common"
+    }
+
     sourceSets {
         commonMain.dependencies {
             api(project.dependencies.platform(libs.koin.bom))
