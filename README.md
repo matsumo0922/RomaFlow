@@ -16,6 +16,7 @@ The project is a Kotlin Multiplatform codebase based on `matsumo0922/kmp-templat
 
 ```sh
 make detekt
+./gradlew :core:ime:allTests
 ./gradlew :androidApp:assembleDebug
 ```
 
@@ -28,6 +29,21 @@ make generate
 xcodebuild -project macosApp/RomaFlowMacOS.xcodeproj -scheme RomaFlowHarness -configuration Debug -destination 'platform=macOS,arch=arm64' build CODE_SIGNING_ALLOWED=NO
 xcodebuild -project macosApp/RomaFlowMacOS.xcodeproj -scheme RomaFlowInputMethod -configuration Debug -destination 'platform=macOS,arch=arm64' build CODE_SIGNING_ALLOWED=NO
 ```
+
+## macOS Minimal Input Check
+
+```sh
+DERIVED_DATA_DIR=/tmp/RomaFlowDerivedData
+make generate
+xcodebuild -project macosApp/RomaFlowMacOS.xcodeproj -scheme RomaFlowInputMethod -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath "$DERIVED_DATA_DIR" build CODE_SIGNING_ALLOWED=NO
+xcodebuild -project macosApp/RomaFlowMacOS.xcodeproj -scheme RomaFlowHarness -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath "$DERIVED_DATA_DIR" build CODE_SIGNING_ALLOWED=NO
+mkdir -p "$HOME/Library/Input Methods"
+cp -R "$DERIVED_DATA_DIR/Build/Products/Debug/RomaFlow.inputmethod" "$HOME/Library/Input Methods/"
+killall TextInputMenuAgent
+open "$DERIVED_DATA_DIR/Build/Products/Debug/RomaFlowHarness.app"
+```
+
+Enable RomaFlow from System Settings, select it from the input menu, and type in the harness text editor. Lowercase `a`-`z` should appear as marked text, Space / Return should commit it, Delete should remove one composing character, and Escape should cancel the composition.
 
 ## Android Studio macOS Run Notes
 
