@@ -15,7 +15,7 @@ The project is a Kotlin Multiplatform codebase based on `matsumo0922/kmp-templat
 ## Verification
 
 ```sh
-./gradlew detekt
+make detekt
 ./gradlew :androidApp:assembleDebug
 ```
 
@@ -23,5 +23,19 @@ The project is a Kotlin Multiplatform codebase based on `matsumo0922/kmp-templat
 
 ```sh
 xcodegen --version
-./gradlew :shared:tasks --all
+make generate
+./gradlew :core:ime:tasks --all
+xcodebuild -project macosApp/RomaFlowMacOS.xcodeproj -scheme RomaFlowHarness -configuration Debug -destination 'platform=macOS,arch=arm64' build CODE_SIGNING_ALLOWED=NO
+xcodebuild -project macosApp/RomaFlowMacOS.xcodeproj -scheme RomaFlowInputMethod -configuration Debug -destination 'platform=macOS,arch=arm64' build CODE_SIGNING_ALLOWED=NO
+```
+
+## Android Studio macOS Run Notes
+
+Use Xcode 26.5 for the macOS targets. Swift Export artifacts are compiler-version sensitive, and Xcode 16.4 / Swift 6.1.2 does not link the current Kotlin 2.4 Swift Export output.
+
+If Android Studio reports a Swift module version mismatch, stop Gradle daemons, clean Android Studio's `RomaFlowMacOS` DerivedData, regenerate the Xcode project, and run again.
+
+```sh
+./gradlew --stop
+make generate
 ```
