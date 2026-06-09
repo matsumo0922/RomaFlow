@@ -1,0 +1,76 @@
+name: RomaFlowMacOS
+
+options:
+  minimumXcodeGenVersion: 2.45.4
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "26.5"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+
+targetTemplates:
+  KmpLinkedMacTarget:
+    platform: macOS
+    settings:
+      base:
+        ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+    preBuildScripts:
+      - name: Embed Swift Export
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          # XcodeGen places SRCROOT at macosApp, so move to the repository root before running Gradle.
+          cd "$SRCROOT/.."
+          xcrun swiftc --version
+          ./gradlew --no-daemon --rerun-tasks :core:ime:embedSwiftExportForXcode
+
+targets:
+  RomaFlowHarness:
+    templates:
+      - KmpLinkedMacTarget
+    type: application
+    sources:
+      - Sources/Harness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.matsumo.romaflow.macos.harness
+    info:
+      path: Generated/RomaFlowHarness/Info.plist
+      properties:
+        CFBundleDisplayName: RomaFlow Harness
+        CFBundleShortVersionString: "0.0.1"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "14.0"
+
+  RomaFlowInputMethod:
+    templates:
+      - KmpLinkedMacTarget
+    type: application
+    sources:
+      - Sources/InputMethod
+    dependencies:
+      - sdk: InputMethodKit.framework
+      - sdk: Carbon.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.matsumo.romaflow.inputmethod
+        PRODUCT_NAME: RomaFlow
+        WRAPPER_EXTENSION: inputmethod
+    info:
+      path: Generated/RomaFlowInputMethod/Info.plist
+      properties:
+        CFBundleDisplayName: RomaFlow
+        CFBundleShortVersionString: "0.0.1"
+        CFBundleVersion: "1"
+        LSBackgroundOnly: true
+        LSMinimumSystemVersion: "14.0"
+        InputMethodConnectionName: RomaFlowInputMethod_Connection
+        InputMethodServerControllerClass: RomaFlowInputController
+        tsInputMethodCharacterRepertoireKey:
+          - Latn
+          - Jpan

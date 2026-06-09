@@ -59,6 +59,7 @@ iosApp/iosApp/secret.plist
 # Xcode (XcodeGen で生成されるファイルを含む)
 xcuserdata
 *.xcodeproj
+macosApp/Generated/
 iosApp/RomaFlow/Info.plist
 iosApp/ShareExtension/Info.plist
 iosApp/Pods
