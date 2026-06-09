@@ -59,3 +59,5 @@ After building `RomaFlowInputMethod` from Android Studio, install the latest bui
 ```sh
 make install-inputmethod
 ```
+
+`RomaFlowInputMethod` is installed as `~/Library/Input Methods/RomaFlow.app`.

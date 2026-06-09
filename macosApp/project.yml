@@ -60,7 +60,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.matsumo.romaflow.inputmethod
         PRODUCT_NAME: RomaFlow
-        WRAPPER_EXTENSION: inputmethod
+        WRAPPER_EXTENSION: app
     info:
       path: Generated/RomaFlowInputMethod/Info.plist
       properties:
@@ -74,3 +74,26 @@ targets:
         tsInputMethodCharacterRepertoireKey:
           - Latn
           - Jpan
+
+schemes:
+  RomaFlowHarness:
+    build:
+      targets:
+        RomaFlowHarness: all
+      buildImplicitDependencies: false
+      parallelizeBuild: false
+    run:
+      config: Debug
+    management:
+      shared: true
+
+  RomaFlowInputMethod:
+    build:
+      targets:
+        RomaFlowInputMethod: all
+      buildImplicitDependencies: false
+      parallelizeBuild: false
+    run:
+      config: Debug
+    management:
+      shared: true
