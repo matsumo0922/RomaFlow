@@ -53,6 +53,7 @@ targets:
     type: application
     sources:
       - Sources/InputMethod
+      - Resources/InputMethod
     dependencies:
       - sdk: InputMethodKit.framework
       - sdk: Carbon.framework
@@ -71,6 +72,7 @@ targets:
         LSMinimumSystemVersion: "14.0"
         InputMethodConnectionName: RomaFlowInputMethod_Connection
         InputMethodServerControllerClass: RomaFlowInputController
+        tsInputMethodIconFileKey: icon.pdf
         ComponentInputModeDict:
           tsInputModeListKey:
             com.apple.inputmethod.Japanese:
