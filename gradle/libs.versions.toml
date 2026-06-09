@@ -58,22 +58,22 @@ koin = "4.2.1"
 
 # UI
 calf = "0.12.0"
-zoomable = "2.9.0"
+zoomable = "2.12.0"
 kolor = "4.1.1"
-colorPicker = "1.1.3"
+colorPicker = "1.2.0"
 
 # Ads
-lexilabsBasicAds = "1.1.0"
+lexilabsBasicAds = "1.1.1"
 
 # Others
 gifkt = "0.3.3"
-kmpZip = "0.7.2"
+kmpZip = "0.12.1"
 ktor = "3.5.0"
 coil3 = "3.4.0"
 filekit = "0.14.1"
 detekt = "1.23.8"
-libraries = "13.2.1"
-placeholder = "1.0.2"
+libraries = "14.2.1"
+placeholder = "1.0.3"
 buildKonfig = "0.17.1"
 twitterComposeRule = "0.0.26"
 
