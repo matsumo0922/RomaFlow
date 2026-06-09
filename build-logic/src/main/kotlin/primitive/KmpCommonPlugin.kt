@@ -7,6 +7,9 @@ import org.gradle.api.Project
 import org.gradle.kotlin.dsl.configure
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 
+/**
+ * 共通 Kotlin Multiplatform 設定を適用する Gradle プラグイン。
+ */
 class KmpCommonPlugin : Plugin<Project> {
     override fun apply(target: Project) {
         with(target) {
@@ -16,10 +19,6 @@ class KmpCommonPlugin : Plugin<Project> {
 
             kotlin {
                 applyDefaultHierarchyTemplate()
-
-                compilerOptions {
-                    freeCompilerArgs.add("-Xexplicit-backing-fields")
-                }
 
                 sourceSets.commonMain.dependencies {
                     val kotlinBom = libs.library("kotlin-bom")

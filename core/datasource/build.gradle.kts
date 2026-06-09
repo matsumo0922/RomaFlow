@@ -51,7 +51,7 @@ kotlin {
 }
 
 dependencies {
-    listOf("kspAndroid", "kspIosX64", "kspIosArm64", "kspIosSimulatorArm64").forEach { target ->
+    listOf("kspAndroid", "kspIosArm64", "kspIosSimulatorArm64").forEach { target ->
         add(target, libs.androidx.room.compiler)
     }
 }
