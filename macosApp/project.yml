@@ -71,8 +71,22 @@ targets:
         LSMinimumSystemVersion: "14.0"
         InputMethodConnectionName: RomaFlowInputMethod_Connection
         InputMethodServerControllerClass: RomaFlowInputController
+        ComponentInputModeDict:
+          tsInputModeListKey:
+            com.apple.inputmethod.Japanese:
+              TISInputSourceID: me.matsumo.romaflow.inputmethod.Japanese
+              TISIntendedLanguage: ja
+              tsInputModeDefaultStateKey: true
+              tsInputModeIsVisibleKey: true
+              tsInputModePrimaryInScriptKey: true
+              tsInputModeScriptKey: smJapanese
+          tsVisibleInputModeOrderedArrayKey:
+            - com.apple.inputmethod.Japanese
+        TISIntendedLanguage: ja
         tsInputMethodCharacterRepertoireKey:
           - Latn
+          - Hira
+          - Kana
           - Jpan
 
 schemes:
