@@ -9,14 +9,6 @@ java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(17))
 }
 
-kotlin {
-    sourceSets.all {
-        languageSettings {
-            languageVersion = "2.0"
-        }
-    }
-}
-
 dependencies {
     compileOnly(gradleKotlinDsl())
     implementation(libs.android.gradlePlugin)

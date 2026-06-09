@@ -74,7 +74,7 @@ filekit = "0.14.1"
 detekt = "1.23.8"
 libraries = "14.2.1"
 placeholder = "1.0.3"
-buildKonfig = "0.17.1"
+buildKonfig = "0.21.2"
 twitterComposeRule = "0.0.26"
 
 # Debugs
