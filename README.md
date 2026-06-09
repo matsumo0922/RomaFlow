@@ -37,9 +37,7 @@ DERIVED_DATA_DIR=/tmp/RomaFlowDerivedData
 make generate
 xcodebuild -project macosApp/RomaFlowMacOS.xcodeproj -scheme RomaFlowInputMethod -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath "$DERIVED_DATA_DIR" build CODE_SIGNING_ALLOWED=NO
 xcodebuild -project macosApp/RomaFlowMacOS.xcodeproj -scheme RomaFlowHarness -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath "$DERIVED_DATA_DIR" build CODE_SIGNING_ALLOWED=NO
-mkdir -p "$HOME/Library/Input Methods"
-cp -R "$DERIVED_DATA_DIR/Build/Products/Debug/RomaFlow.inputmethod" "$HOME/Library/Input Methods/"
-killall TextInputMenuAgent
+make install-inputmethod DERIVED_DATA_DIR="$DERIVED_DATA_DIR"
 open "$DERIVED_DATA_DIR/Build/Products/Debug/RomaFlowHarness.app"
 ```
 
@@ -54,4 +52,10 @@ If Android Studio reports a Swift module version mismatch, stop Gradle daemons, 
 ```sh
 ./gradlew --stop
 make generate
+```
+
+After building `RomaFlowInputMethod` from Android Studio, install the latest built input method and run `RomaFlowHarness`.
+
+```sh
+make install-inputmethod
 ```
