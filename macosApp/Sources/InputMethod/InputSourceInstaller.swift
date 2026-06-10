@@ -44,11 +44,27 @@ enum InputSourceInstaller {
             exit(EXIT_FAILURE)
         }
 
+        // input mode は親 input method が有効でないと有効化できないため、親 → mode の順に処理する
+        let parentSourceID = Bundle.main.bundleIdentifier ?? "me.matsumo.inputmethod.RomaFlow"
+        let parentSources = inputSources.filter { inputSourceID(of: $0) == parentSourceID }
+        let modeSources = inputSources.filter { inputSourceID(of: $0) != parentSourceID }
+
         // macOS 12+ では isEnabled が true を返しても実際には一覧に出ていないことがあるため、
         // 状態を確認せず無条件で有効化する (McBopomofo の workaround と同じ)
-        for inputSource in inputSources {
+        var failedSourceIDs: [String] = []
+
+        for inputSource in parentSources + modeSources {
             let status = TISEnableInputSource(inputSource)
             NSLog("RomaFlow: TISEnableInputSource %@ -> %d", inputSourceID(of: inputSource), status)
+
+            if status != noErr {
+                failedSourceIDs.append(inputSourceID(of: inputSource))
+            }
+        }
+
+        guard failedSourceIDs.isEmpty else {
+            NSLog("RomaFlow: failed to enable input sources: %@", failedSourceIDs.joined(separator: ", "))
+            exit(EXIT_FAILURE)
         }
     }
 

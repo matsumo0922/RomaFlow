@@ -13,7 +13,8 @@ generate:
 detekt:
 	./gradlew detekt --auto-correct --continue
 
-# IME をビルドして ~/Library/Input Methods に配置し、再ログインなしで入力ソースに登録する
+# IME をビルドして ~/Library/Input Methods に配置し、入力ソースとして登録する。
+# 2回目以降の更新は再ログインなしで反映されるが、初回インストール時のみ再ログインが必要になることがある。
 install-ime: generate
 	xcodebuild -project $(XCODEPROJ) -target RomaFlowInputMethod -configuration Debug build
 	-pkill -x RomaFlow
