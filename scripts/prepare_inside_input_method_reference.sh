@@ -49,6 +49,7 @@ fi
 
 mkdir -p \
   "${output_dir}/meta" \
+  "${output_dir}/notes" \
   "${output_dir}/pages" \
   "${output_dir}/text"
 
@@ -111,6 +112,7 @@ Use these files as local working artifacts only. Do not commit extracted text or
 - meta/pdfinfo.txt: PDF metadata and page count.
 - meta/pdffonts.txt: Font embedding and Unicode mapping status.
 - meta/pdfimages.txt: Embedded image list.
+- notes/reading-notes.txt: Manually maintained, non-verbatim page notes when available.
 - text/layout.txt: Layout-preserving extracted text for search.
 - text/plain.txt: Plain extracted text for search.
 - pages/page-NNN.png: Rendered page images for code, API names, and diagrams.
@@ -119,6 +121,8 @@ Important:
 
 - Extracted text is useful for search and context.
 - Extracted Swift, XML, API names, and Info.plist keys can be corrupted.
+- Treat notes/reading-notes.txt as the first AI-readable guide when it exists.
+- Do not create or commit a verbatim full-text transcription of the paid PDF.
 - Verify implementation details against rendered page images and official SDK documentation.
 README
 
