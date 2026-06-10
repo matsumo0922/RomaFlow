@@ -5,6 +5,7 @@
 XCODEPROJ := macosApp/RomaFlowMacOS.xcodeproj
 IME_INSTALL_DIR := $(HOME)/Library/Input Methods
 IME_APP := $(IME_INSTALL_DIR)/RomaFlow.app
+LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
 
 generate:
 	xcodegen generate --spec macosApp/project.yml
@@ -22,6 +23,9 @@ install-ime: generate
 	codesign --force --sign - --deep "$(IME_APP)"
 	"$(IME_APP)/Contents/MacOS/RomaFlow" --register-input-source
 	"$(IME_APP)/Contents/MacOS/RomaFlow" --enable-input-source
+	# LaunchServices に登録しないと入力ソースの選択が永続化されず、メニューバーにも反映されない
+	$(LSREGISTER) -f "$(IME_APP)"
+	-killall TextInputMenuAgent
 
 uninstall-ime:
 	-pkill -x RomaFlow
