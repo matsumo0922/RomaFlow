@@ -58,9 +58,9 @@ targets:
       - sdk: Carbon.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: me.matsumo.romaflow.inputmethod
+        # macOS は bundle ID にドット区切りの "inputmethod" セグメントが含まれるものだけを IME として認識する
+        PRODUCT_BUNDLE_IDENTIFIER: me.matsumo.inputmethod.RomaFlow
         PRODUCT_NAME: RomaFlow
-        WRAPPER_EXTENSION: inputmethod
     info:
       path: Generated/RomaFlowInputMethod/Info.plist
       properties:
@@ -69,8 +69,11 @@ targets:
         CFBundleVersion: "1"
         LSBackgroundOnly: true
         LSMinimumSystemVersion: "14.0"
-        InputMethodConnectionName: RomaFlowInputMethod_Connection
+        InputMethodConnectionName: $(PRODUCT_BUNDLE_IDENTIFIER)_Connection
         InputMethodServerControllerClass: RomaFlowInputController
+        TISInputSourceID: me.matsumo.inputmethod.RomaFlow
+        TISIntendedLanguage: ja
         tsInputMethodCharacterRepertoireKey:
           - Latn
-          - Jpan
+          - Hira
+          - Kana
