@@ -55,6 +55,7 @@ core/database/schemas
 
 # Paid reference materials
 docs/ref/inside-input-method-1.1.0.pdf
+docs/ref/inside-input-method/
 
 # iOS secret files
 iosApp/iosApp/secret.plist

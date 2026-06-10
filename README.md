@@ -15,6 +15,7 @@ RomaFlow IME は、ローマ字入力を続けながら、入力中の文字列�
 ## 参考資料
 
 - [日本語入力を作るときに必要だった本](https://mzp.booth.pm/items/809262) - 著者: SKK
+- [inside-input-method 読解ガイド](docs/ref/inside-input-method-reading-guide.md)
 
 ## 検証
 
