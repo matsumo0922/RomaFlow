@@ -23,10 +23,23 @@ Examples:
 USAGE
 }
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  usage
-  exit 0
-fi
+render_all_pages=false
+requested_pages=()
+
+for requested_argument in "$@"; do
+  case "${requested_argument}" in
+    --help | -h)
+      usage
+      exit 0
+      ;;
+    --all-pages)
+      render_all_pages=true
+      ;;
+    *)
+      requested_pages+=("${requested_argument}")
+      ;;
+  esac
+done
 
 missing_tools=()
 
@@ -86,19 +99,13 @@ render_page() {
     "${output_dir}/pages/page-${page_label}"
 }
 
-render_all_pages=false
-
-for requested_page in "$@"; do
-  if [[ "${requested_page}" == "--all-pages" ]]; then
-    render_all_pages=true
-  else
-    render_page "${requested_page}"
-  fi
-done
-
 if [[ "${render_all_pages}" == true ]]; then
   for page_number in $(seq 1 "${page_count}"); do
     render_page "${page_number}"
+  done
+else
+  for requested_page in "${requested_pages[@]}"; do
+    render_page "${requested_page}"
   done
 fi
 

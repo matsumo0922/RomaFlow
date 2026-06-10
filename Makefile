@@ -14,7 +14,11 @@ detekt:
 	./gradlew detekt --auto-correct --continue
 
 reference-inside-input-method:
-	scripts/prepare_inside_input_method_reference.sh $(PAGE)
+	@if [ -n "$(PAGE)" ]; then \
+		scripts/prepare_inside_input_method_reference.sh "$(PAGE)"; \
+	else \
+		scripts/prepare_inside_input_method_reference.sh; \
+	fi
 
 # IME をビルドして ~/Library/Input Methods に配置し、入力ソースとして登録する。
 # 2回目以降の更新は再ログインなしで反映されるが、初回インストール時のみ再ログインが必要になることがある。
