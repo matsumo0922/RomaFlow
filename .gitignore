@@ -53,6 +53,9 @@ captures/
 # Room schema
 core/database/schemas
 
+# Paid reference materials
+docs/ref/inside-input-method-1.1.0.pdf
+
 # iOS secret files
 iosApp/iosApp/secret.plist
 
