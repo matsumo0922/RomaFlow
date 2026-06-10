@@ -1,0 +1,6 @@
+/* 入力ソース一覧・メニューバーに表示される input mode の表示名 (キーは Info.plist の mode ID) */
+
+CFBundleName = "RomaFlow";
+
+"com.apple.inputmethod.Japanese" = "RomaFlow (日本語)";
+"com.apple.inputmethod.Roman" = "RomaFlow (英数)";
