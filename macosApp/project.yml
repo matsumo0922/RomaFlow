@@ -19,6 +19,8 @@ targetTemplates:
     settings:
       base:
         ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+        # :core:ime は macosArm64 のみ対応のため、CLI ビルドで x86_64 が要求されないように固定する
+        ARCHS: arm64
     preBuildScripts:
       - name: Embed Swift Export
         basedOnDependencyAnalysis: false
@@ -53,14 +55,16 @@ targets:
     type: application
     sources:
       - Sources/InputMethod
+      - path: Resources/InputMethod
+        buildPhase: resources
     dependencies:
       - sdk: InputMethodKit.framework
       - sdk: Carbon.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: me.matsumo.romaflow.inputmethod
+        # macOS は bundle ID にドット区切りの "inputmethod" セグメントが含まれるものだけを IME として認識する
+        PRODUCT_BUNDLE_IDENTIFIER: me.matsumo.inputmethod.RomaFlow
         PRODUCT_NAME: RomaFlow
-        WRAPPER_EXTENSION: inputmethod
     info:
       path: Generated/RomaFlowInputMethod/Info.plist
       properties:
@@ -69,8 +73,40 @@ targets:
         CFBundleVersion: "1"
         LSBackgroundOnly: true
         LSMinimumSystemVersion: "14.0"
-        InputMethodConnectionName: RomaFlowInputMethod_Connection
+        InputMethodConnectionName: $(PRODUCT_BUNDLE_IDENTIFIER)_Connection
         InputMethodServerControllerClass: RomaFlowInputController
+        TISInputSourceID: me.matsumo.inputmethod.RomaFlow
+        TISIntendedLanguage: ja
         tsInputMethodCharacterRepertoireKey:
           - Latn
-          - Jpan
+          - Hira
+          - Kana
+        tsInputMethodIconFileKey: main.tiff
+        # Apple の canonical mode ID を使うと、システム設定の「日本語」「英語」カテゴリに表示される (azooKey 方式)
+        ComponentInputModeDict:
+          tsVisibleInputModeOrderedArrayKey:
+            - com.apple.inputmethod.Japanese
+            - com.apple.inputmethod.Roman
+          tsInputModeListKey:
+            com.apple.inputmethod.Japanese:
+              TISInputSourceID: me.matsumo.inputmethod.RomaFlow.Japanese
+              TISIntendedLanguage: ja
+              TISIconIsTemplate: true
+              tsInputModePrimaryInScriptKey: true
+              tsInputModeScriptKey: smJapanese
+              tsInputModeDefaultStateKey: true
+              tsInputModeIsVisibleKey: true
+              tsInputModeMenuIconFileKey: main.tiff
+              tsInputModeAlternateMenuIconFileKey: main.tiff
+              tsInputModePaletteIconFileKey: main.tiff
+            com.apple.inputmethod.Roman:
+              TISInputSourceID: me.matsumo.inputmethod.RomaFlow.Roman
+              TISIntendedLanguage: en
+              TISIconIsTemplate: true
+              tsInputModePrimaryInScriptKey: false
+              tsInputModeScriptKey: smRoman
+              tsInputModeDefaultStateKey: true
+              tsInputModeIsVisibleKey: true
+              tsInputModeMenuIconFileKey: en.tiff
+              tsInputModeAlternateMenuIconFileKey: en.tiff
+              tsInputModePaletteIconFileKey: en.tiff

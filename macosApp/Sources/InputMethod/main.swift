@@ -2,11 +2,17 @@ import AppKit
 import InputMethodKit
 import RomaFlowImeCore
 
-private let connectionName = "RomaFlowInputMethod_Connection"
-private let fallbackBundleIdentifier = "me.matsumo.romaflow.inputmethod"
-private let bundleIdentifier = Bundle.main.bundleIdentifier ?? fallbackBundleIdentifier
-private let engine = RomaFlowEngine()
-private let server = IMKServer(name: connectionName, bundleIdentifier: bundleIdentifier)
+if let command = CommandLine.arguments.dropFirst().first {
+    InputSourceInstaller.run(command: command)
+}
 
-NSLog("RomaFlow input method server started: \(engine.smokeText())")
-RunLoop.current.run()
+let fallbackBundleIdentifier = "me.matsumo.inputmethod.RomaFlow"
+let bundleIdentifier = Bundle.main.bundleIdentifier ?? fallbackBundleIdentifier
+let connectionName = Bundle.main.object(forInfoDictionaryKey: "InputMethodConnectionName") as? String
+    ?? "\(bundleIdentifier)_Connection"
+
+let engine = RomaFlowEngine()
+let server = IMKServer(name: connectionName, bundleIdentifier: bundleIdentifier)
+
+NSLog("RomaFlow input method server started: %@", engine.smokeText())
+NSApplication.shared.run()
