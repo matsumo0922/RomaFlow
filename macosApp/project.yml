@@ -19,6 +19,8 @@ targetTemplates:
     settings:
       base:
         ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+        # :core:ime は macosArm64 のみ対応のため、CLI ビルドで x86_64 が要求されないように固定する
+        ARCHS: arm64
     preBuildScripts:
       - name: Embed Swift Export
         basedOnDependencyAnalysis: false
