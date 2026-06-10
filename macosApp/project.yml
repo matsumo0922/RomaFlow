@@ -53,6 +53,8 @@ targets:
     type: application
     sources:
       - Sources/InputMethod
+      - path: Resources/InputMethod
+        buildPhase: resources
     dependencies:
       - sdk: InputMethodKit.framework
       - sdk: Carbon.framework
@@ -77,3 +79,32 @@ targets:
           - Latn
           - Hira
           - Kana
+        tsInputMethodIconFileKey: main.tiff
+        # Apple の canonical mode ID を使うと、システム設定の「日本語」「英語」カテゴリに表示される (azooKey 方式)
+        ComponentInputModeDict:
+          tsVisibleInputModeOrderedArrayKey:
+            - com.apple.inputmethod.Japanese
+            - com.apple.inputmethod.Roman
+          tsInputModeListKey:
+            com.apple.inputmethod.Japanese:
+              TISInputSourceID: me.matsumo.inputmethod.RomaFlow.Japanese
+              TISIntendedLanguage: ja
+              TISIconIsTemplate: true
+              tsInputModePrimaryInScriptKey: true
+              tsInputModeScriptKey: smJapanese
+              tsInputModeDefaultStateKey: true
+              tsInputModeIsVisibleKey: true
+              tsInputModeMenuIconFileKey: main.tiff
+              tsInputModeAlternateMenuIconFileKey: main.tiff
+              tsInputModePaletteIconFileKey: main.tiff
+            com.apple.inputmethod.Roman:
+              TISInputSourceID: me.matsumo.inputmethod.RomaFlow.Roman
+              TISIntendedLanguage: en
+              TISIconIsTemplate: true
+              tsInputModePrimaryInScriptKey: false
+              tsInputModeScriptKey: smRoman
+              tsInputModeDefaultStateKey: true
+              tsInputModeIsVisibleKey: true
+              tsInputModeMenuIconFileKey: en.tiff
+              tsInputModeAlternateMenuIconFileKey: en.tiff
+              tsInputModePaletteIconFileKey: en.tiff
