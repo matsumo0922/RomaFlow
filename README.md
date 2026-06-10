@@ -12,6 +12,10 @@ RomaFlow IME は、ローマ字入力を続けながら、入力中の文字列�
 - Apple ホスト向けの Kotlin Multiplatform 出力には Swift Export を使用します
 - Android InputMethodService 対応は、共有ライブ変換コアを macOS で検証したあとに予定しています
 
+## 参考資料
+
+- [日本語入力を作るときに必要だった本](https://mzp.booth.pm/items/809262) - 著者: SKK
+
 ## 検証
 
 ```sh
