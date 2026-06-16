@@ -38,7 +38,7 @@ final class RomaFlowInputController: IMKInputController {
         case keyCodeDelete:
             return handleBackspace(with: client)
         case keyCodeTab:
-            return handleConvert(with: client)
+            return handleConvert(event, client: client)
         default:
             break
         }
@@ -104,8 +104,18 @@ final class RomaFlowInputController: IMKInputController {
     }
 
     // Tab: 未確定かなを ConversionProvider で変換し、結果を marked テキストとして表示する。
-    // 未確定でなければ false を返し、通常の Tab としてアプリ側に流す。
-    private func handleConvert(with client: IMKTextInput) -> Bool {
+    // 変換するのは修飾キーなしの Tab だけ。Cmd+Tab / Ctrl+Tab / Option+Tab / Shift+Tab などは
+    // アプリ側のショートカットなので、未確定中なら WYSIWYG で確定してから false を返して流す。
+    // 未確定でない素の Tab も false を返し、通常の Tab としてアプリ側に流す。
+    private func handleConvert(_ event: NSEvent, client: IMKTextInput) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasShortcutModifier = !modifiers.intersection([.command, .control, .option, .shift]).isEmpty
+        if hasShortcutModifier {
+            _ = performCommit(with: client)
+
+            return false
+        }
+
         guard engine.hasComposition() else {
             return false
         }
