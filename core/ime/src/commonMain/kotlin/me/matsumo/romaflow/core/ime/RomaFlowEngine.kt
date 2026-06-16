@@ -21,6 +21,12 @@ class RomaFlowEngine internal constructor(
     // 変換済み状態で候補ウィンドウへ提示する候補リスト。未変換のときは空。
     private var candidates: List<String> = emptyList()
 
+    // 入力状態のリビジョン。入力を変える操作のたびに増やし、非同期変換の stale 判定に使う。
+    private var inputRevision = 0
+
+    // 実行中の変換要求が発行されたときの入力リビジョン。結果適用時にこれが現在値と一致するか確認する。
+    private var pendingConversionRevision = -1
+
     /** Swift Export / 本番経路向けに既定の AI [ConversionProvider] を使う constructor。 */
     constructor() : this(defaultConversionProvider())
 
@@ -30,6 +36,7 @@ class RomaFlowEngine internal constructor(
 
     fun inputRomaji(text: String): String {
         // 変換済み状態からの追加入力は呼び出し側が commit してから渡す想定。念のため変換状態を解除する。
+        markInputChanged()
         resetConversion()
         romajiBuffer.append(text)
 
@@ -37,6 +44,8 @@ class RomaFlowEngine internal constructor(
     }
 
     fun deleteBackward(): String {
+        markInputChanged()
+
         // 変換済み状態での Backspace は変換を取り消し、raw 編集できるかな状態へ戻す。
         if (convertedText != null) {
             resetConversion()
@@ -58,14 +67,16 @@ class RomaFlowEngine internal constructor(
             return ""
         }
 
+        pendingConversionRevision = inputRevision
         val reading = finalizedKana()
 
         return conversionProvider.convert(reading)
     }
 
     fun applyConversion(result: String): String {
-        // convert() の結果を main スレッドで状態へ反映する。失敗(空文字)や buffer 消失時は据え置く。
-        if (result.isEmpty() || romajiBuffer.isEmpty()) {
+        // 失敗(空文字)・buffer 消失・要求発行後に入力が変わった(stale)場合は据え置く。
+        // stale 判定により、入力モード切替や追加入力で取り消したあとに遅れて返った結果の復活を防ぐ。
+        if (result.isEmpty() || romajiBuffer.isEmpty() || inputRevision != pendingConversionRevision) {
             return ""
         }
 
@@ -86,6 +97,7 @@ class RomaFlowEngine internal constructor(
 
     fun commitCandidate(text: String): String {
         // 候補ウィンドウで選択された候補を確定する。表示文字列をそのまま受け取り WYSIWYG で確定する。
+        markInputChanged()
         clearState()
 
         return text
@@ -93,6 +105,7 @@ class RomaFlowEngine internal constructor(
 
     fun commit(): String {
         // WYSIWYG で確定する。変換済みなら変換結果、未変換なら末尾 n を解決したかなを返す。
+        markInputChanged()
         val committed = convertedText ?: finalizedKana()
         clearState()
 
@@ -100,6 +113,7 @@ class RomaFlowEngine internal constructor(
     }
 
     fun cancel() {
+        markInputChanged()
         clearState()
     }
 
@@ -142,6 +156,10 @@ class RomaFlowEngine internal constructor(
         }
 
         return character
+    }
+
+    private fun markInputChanged() {
+        inputRevision++
     }
 
     private fun resetConversion() {

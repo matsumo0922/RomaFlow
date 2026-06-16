@@ -78,6 +78,13 @@ final class RomaFlowInputController: IMKInputController {
     override func setValue(_ value: Any!, forTag tag: Int, client sender: Any!) {
         super.setValue(value, forTag: tag, client: sender)
 
+        // 入力モード切替時は in-flight の AI 変換を止め、表示中の composition を WYSIWYG 確定する (issue #8)。
+        // これをしないと、切替後に遅れて返った変換結果が marked text として復活してしまう。
+        cancelPendingConversion()
+        if let client = sender as? IMKTextInput {
+            _ = performCommit(with: client)
+        }
+
         guard let inputModeID = value as? String else {
             return
         }

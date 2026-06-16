@@ -145,6 +145,19 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun applyConversion_rejectsStaleResultWhenInputChangedAfterRequest() = runTest {
+        val engine = RomaFlowEngine(FakeConversionProvider())
+        engine.inputRomaji("nihongo")
+        val result = engine.convert()
+
+        // 変換要求の発行後に入力が変わったら、遅れて返った結果は stale として破棄する
+        engine.inputRomaji("ka")
+
+        assertEquals("", engine.applyConversion(result))
+        assertFalse(engine.isConverted())
+    }
+
+    @Test
     fun commit_returnsConvertedTextWhenConverted() = runTest {
         val engine = RomaFlowEngine(FakeConversionProvider())
         engine.inputRomaji("kanji")
