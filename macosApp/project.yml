@@ -99,11 +99,11 @@ targets:
           - Hira
           - Kana
         tsInputMethodIconFileKey: main.tiff
-        # Apple の canonical mode ID を使うと、システム設定の「日本語」「英語」カテゴリに表示される (azooKey 方式)
+        # Apple の canonical mode ID を使うと、システム設定の「日本語」カテゴリに表示される (azooKey 方式)。
+        # 英語入力は別 input source (ABC) に任せるため、英数 (Roman) モードは提供しない。
         ComponentInputModeDict:
           tsVisibleInputModeOrderedArrayKey:
             - com.apple.inputmethod.Japanese
-            - com.apple.inputmethod.Roman
           tsInputModeListKey:
             com.apple.inputmethod.Japanese:
               TISInputSourceID: me.matsumo.inputmethod.RomaFlow.Japanese
@@ -116,14 +116,3 @@ targets:
               tsInputModeMenuIconFileKey: main.tiff
               tsInputModeAlternateMenuIconFileKey: main.tiff
               tsInputModePaletteIconFileKey: main.tiff
-            com.apple.inputmethod.Roman:
-              TISInputSourceID: me.matsumo.inputmethod.RomaFlow.Roman
-              TISIntendedLanguage: en
-              TISIconIsTemplate: true
-              tsInputModePrimaryInScriptKey: false
-              tsInputModeScriptKey: smRoman
-              tsInputModeDefaultStateKey: true
-              tsInputModeIsVisibleKey: true
-              tsInputModeMenuIconFileKey: en.tiff
-              tsInputModeAlternateMenuIconFileKey: en.tiff
-              tsInputModePaletteIconFileKey: en.tiff
