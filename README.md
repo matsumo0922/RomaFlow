@@ -38,8 +38,22 @@ upstream PR がマージ・リリースされたら、`gradle/libs.versions.toml
 
 ## macOS ブートストラップ確認
 
+`make generate` と `make install-ime` には XcodeGen と xcbeautify が必要です。Homebrew を使っている場合は次のように導入できます。
+
+`make install-ime` は `xcodebuild` のログを xcbeautify で整形するため、未導入の場合はビルド前にエラーで停止します。
+
+```sh
+brew install xcodegen xcbeautify
+```
+
+導入後に CLI が参照できることを確認してください。
+
 ```sh
 xcodegen --version
+xcbeautify --version
+```
+
+```sh
 make generate
 ./gradlew :core:ime:tasks --all
 xcodebuild -project macosApp/RomaFlowMacOS.xcodeproj -scheme RomaFlowHarness -configuration Debug -destination 'platform=macOS,arch=arm64' build CODE_SIGNING_ALLOWED=NO
