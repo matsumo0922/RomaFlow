@@ -17,6 +17,12 @@ final class RomaFlowInputController: IMKInputController {
     // insertText / setMarkedText で「置換範囲を指定しない」ことを示す range
     private let notFoundRange = NSRange(location: NSNotFound, length: 0)
 
+    // 英数 (Roman) モードの input mode ID。setValue でこの ID が来たら IME 変換を止める。
+    private let romanInputModeID = "com.apple.inputmethod.Roman"
+
+    // 現在の input mode が英数 (Roman) かどうか。setValue 経由で更新される。
+    private var isRomanMode = false
+
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         super.init(server: server, delegate: delegate, client: inputClient)
 
@@ -29,9 +35,14 @@ final class RomaFlowInputController: IMKInputController {
             return false
         }
 
+        // 英数モードでは IME 変換を行わず、入力をアプリへそのまま流す
+        if isRomanMode {
+            return false
+        }
+
         switch Int(event.keyCode) {
         case keyCodeReturn, keyCodeKeypadEnter:
-            return commitComposition(with: client)
+            return performCommit(with: client)
         case keyCodeEscape:
             return cancelComposition(with: client)
         case keyCodeDelete:
@@ -57,7 +68,27 @@ final class RomaFlowInputController: IMKInputController {
             return
         }
 
+        // 入力モードは ID 文字列で通知される。canonical な Roman ID と、独自 TISInputSourceID の両形式に対応する。
+        let switchingToRoman = inputModeID == romanInputModeID || inputModeID.hasSuffix(".Roman")
+
+        // かな→英数へ切り替わる瞬間に未確定が残ると宙に浮くため、WYSIWYG で確定してから切り替える
+        if switchingToRoman, let client = sender as? IMKTextInput {
+            _ = performCommit(with: client)
+        }
+
+        isRomanMode = switchingToRoman
+
         NSLog("RomaFlow input mode changed: %@", inputModeID)
+    }
+
+    // IMK が composition の即時終了を要求したとき (フォーカス喪失や composition 外クリック等) に呼ばれる。
+    // Enter 以外の終了経路でも同じ commit/clear 経路へ流し、未確定テキストと engine buffer を残さない。
+    override func commitComposition(_ sender: Any!) {
+        guard let client = sender as? IMKTextInput else {
+            return
+        }
+
+        _ = performCommit(with: client)
     }
 
     // 印字可能な文字を engine に渡し、変換後のかなを未確定 (marked) テキストとして表示する
@@ -84,8 +115,9 @@ final class RomaFlowInputController: IMKInputController {
         return true
     }
 
-    // Enter: 未確定中なら確定文字列を挿入し marked テキストを消す。未確定でなければアプリ側に流す。
-    private func commitComposition(with client: IMKTextInput) -> Bool {
+    // 未確定中なら確定文字列を挿入し marked テキストを消す。未確定でなければ false を返してアプリ側に流す。
+    // Enter・involuntary commit・モード切り替えの全ての確定経路がこのメソッドを共有する。
+    private func performCommit(with client: IMKTextInput) -> Bool {
         guard engine.hasComposition() else {
             return false
         }
