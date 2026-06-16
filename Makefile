@@ -8,7 +8,7 @@ IME_APP := $(IME_INSTALL_DIR)/RomaFlow.app
 
 generate:
 	@printf '==> Generating Xcode project\n'
-	@xcodegen generate --quiet --spec macosApp/project.yml
+	@xcodegen generate --spec macosApp/project.yml
 	@printf '==> Generated %s\n' "$(XCODEPROJ)"
 
 detekt:

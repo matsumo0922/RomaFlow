@@ -60,7 +60,7 @@ build_input_method() {
     -target RomaFlowInputMethod \
     -configuration Debug \
     build \
-    2>&1 | tee "${build_log}" | "${formatter_command}" --quiet --disable-logging; then
+    2>&1 | tee "${build_log}" | "${formatter_command}" --disable-logging; then
     printf 'error: xcodebuild failed. Raw log: %s\n' "${build_log}" >&2
     exit 1
   fi
