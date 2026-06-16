@@ -4,11 +4,11 @@ package me.matsumo.romaflow.core.ime
  * 決定的な rule-based の [ConversionProvider] スタブ。
  *
  * AI を使わず固定の変換表で既知のかな語を漢字へ置換し、表にない部分はかなのまま残す。
- * 実 AI provider を差し込むまでの開発・テスト用で、同じ入力には常に同じ結果を返す。
+ * テスト・開発用で、同じ入力には常に同じ結果を返す。
  */
-class FakeConversionProvider : ConversionProvider {
+internal class FakeConversionProvider : ConversionProvider {
 
-    override fun convert(kana: String): String {
+    override suspend fun convert(kana: String): String {
         var converted = kana
 
         for ((reading, kanji) in CONVERSION_TABLE) {

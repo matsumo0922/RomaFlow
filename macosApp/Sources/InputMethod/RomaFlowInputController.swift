@@ -28,6 +28,9 @@ final class RomaFlowInputController: IMKInputController {
     // 候補ウィンドウを表示中かどうか。表示中はキー入力を候補ウィンドウ操作へ振り分ける。
     private var isCandidateWindowVisible = false
 
+    // 実行中の AI 変換 Task。後続入力で stale 結果を破棄するためにキャンセルする。
+    private var conversionTask: Task<Void, Never>?
+
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         candidateWindow = IMKCandidates(server: server, panelType: kIMKSingleColumnScrollingCandidatePanel)
         super.init(server: server, delegate: delegate, client: inputClient)
@@ -40,6 +43,9 @@ final class RomaFlowInputController: IMKInputController {
         guard let event, event.type == .keyDown, let client = sender as? IMKTextInput else {
             return false
         }
+
+        // 新しいキー入力が来たら実行中の AI 変換は stale なのでキャンセルする。
+        cancelPendingConversion()
 
         // 候補ウィンドウ表示中は、まず候補操作として処理する。
         if isCandidateWindowVisible {
@@ -72,6 +78,13 @@ final class RomaFlowInputController: IMKInputController {
     override func setValue(_ value: Any!, forTag tag: Int, client sender: Any!) {
         super.setValue(value, forTag: tag, client: sender)
 
+        // 入力モード切替時は in-flight の AI 変換を止め、表示中の composition を WYSIWYG 確定する (issue #8)。
+        // これをしないと、切替後に遅れて返った変換結果が marked text として復活してしまう。
+        cancelPendingConversion()
+        if let client = sender as? IMKTextInput {
+            _ = performCommit(with: client)
+        }
+
         guard let inputModeID = value as? String else {
             return
         }
@@ -86,6 +99,7 @@ final class RomaFlowInputController: IMKInputController {
             return
         }
 
+        cancelPendingConversion()
         _ = performCommit(with: client)
     }
 
@@ -148,8 +162,8 @@ final class RomaFlowInputController: IMKInputController {
         return true
     }
 
-    // Tab: 未確定かなを ConversionProvider で変換し、結果を marked テキストとして表示する。
-    // 複数候補があれば候補ウィンドウも表示する。
+    // Tab: 未確定かなを AI ConversionProvider で非同期に変換し、結果を marked テキストとして表示する。
+    // 複数候補があれば候補ウィンドウも表示する。await 中はかな marked を維持する。
     // 変換するのは修飾キーなしの Tab だけ。Cmd+Tab / Ctrl+Tab / Option+Tab / Shift+Tab などは
     // アプリ側のショートカットなので、未確定中なら WYSIWYG で確定してから false を返して流す。
     // 未確定でない素の Tab も false を返し、通常の Tab としてアプリ側に流す。
@@ -166,14 +180,38 @@ final class RomaFlowInputController: IMKInputController {
             return false
         }
 
-        let converted = engine.convert()
-        updateMarkedText(converted, client: client)
+        // 変換結果は非同期で届く。後続入力で破棄できるよう Task を保持する。
+        conversionTask = Task { @MainActor [weak self] in
+            await self?.runConversion(client: client)
+        }
+
+        return true
+    }
+
+    // AI 変換を実行し、結果を main スレッドで状態へ反映する。失敗・キャンセル・空結果は据え置く。
+    @MainActor
+    private func runConversion(client: IMKTextInput) async {
+        let result = (try? await engine.convert()) ?? ""
+
+        if Task.isCancelled || result.isEmpty {
+            return
+        }
+
+        let applied = engine.applyConversion(result: result)
+        guard !applied.isEmpty else {
+            return
+        }
+
+        updateMarkedText(applied, client: client)
 
         if engine.hasMultipleCandidates() {
             showCandidateWindow()
         }
+    }
 
-        return true
+    private func cancelPendingConversion() {
+        conversionTask?.cancel()
+        conversionTask = nil
     }
 
     // 候補ウィンドウ表示中のキー処理。↑↓ で候補移動、Enter で選択し、それ以外は変換結果を確定してから処理する。
