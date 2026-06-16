@@ -25,8 +25,32 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLONE_DIR="${WANAKANA_FORK_DIR:-$(cd "$REPO_ROOT/.." && pwd)/wanakana-kmp}"
 
+# REPO_URL から owner/repo slug を取り出す (https / ssh どちらの形式でも動く)。
+EXPECTED_SLUG="$(printf '%s' "$REPO_URL" | sed -E 's#^.*[/:]([^/]+/[^/]+)$#\1#; s#\.git$##')"
+
 if [ -d "$CLONE_DIR/.git" ]; then
-  echo "==> updating existing clone: $CLONE_DIR"
+  echo "==> reusing existing clone: $CLONE_DIR"
+
+  # 別リポジトリを誤って操作しないよう remote を確認する。
+  actual_remote="$(git -C "$CLONE_DIR" remote get-url origin 2>/dev/null || true)"
+  case "$actual_remote" in
+    *"$EXPECTED_SLUG"*) : ;;
+    *)
+      echo "error: $CLONE_DIR の origin ($actual_remote) が $EXPECTED_SLUG ではありません。中断します。" >&2
+      exit 1
+      ;;
+  esac
+
+  # 本スクリプトが publish 時に書き換える version override だけは戻す (再実行の冪等性のため)。
+  git -C "$CLONE_DIR" checkout -- wanakana-core/build.gradle.kts 2>/dev/null || true
+
+  # それ以外に未コミット変更があれば、利用者の作業を reset --hard で消さないよう中断する。
+  if [ -n "$(git -C "$CLONE_DIR" status --porcelain)" ]; then
+    echo "error: $CLONE_DIR に未コミットの変更があります。reset --hard で消さないよう中断します。" >&2
+    git -C "$CLONE_DIR" status --short >&2
+    exit 1
+  fi
+
   git -C "$CLONE_DIR" fetch origin "$BRANCH"
   git -C "$CLONE_DIR" checkout "$BRANCH"
   git -C "$CLONE_DIR" reset --hard "origin/$BRANCH"

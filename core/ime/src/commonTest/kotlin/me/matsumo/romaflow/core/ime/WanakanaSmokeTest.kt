@@ -5,8 +5,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * WanaKana (romaji→kana の決定的変換ライブラリ) を :core:ime から呼び出せること、
- * および macosArm64 / android で依存が解決し変換が動くことを確認する smoke テスト。
+ * WanaKana (romaji→kana の決定的変換ライブラリ) を :core:ime から呼び出せることを確認する smoke テスト。
+ *
+ * テストは macosArm64 上で実行し、romaji→kana 変換が動くことを検証する。Android ターゲットは host unit test を
+ * 有効化していないため本テストは実行されず、依存がコンパイル時に解決されること (compileAndroidMain) のみ確認する。
  */
 class WanakanaSmokeTest {
 
