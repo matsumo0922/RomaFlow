@@ -24,6 +24,18 @@ make detekt
 ./gradlew :androidApp:assembleDebug
 ```
 
+## 依存セットアップ（暫定）
+
+romaji→kana 変換には [WanaKana](https://github.com/WaniKani/WanaKana) の Kotlin Multiplatform port を使用します。upstream の `GreatTusk/wanakana-kmp` は macosArm64 target を宣言していないため、`:core:ime`（macosArm64）からそのままでは解決できません。macosArm64 target を追加する PR ([GreatTusk/wanakana-kmp#1](https://github.com/GreatTusk/wanakana-kmp/pull/1)) を出しており、マージ・リリースされるまでは fork を Maven Local に置いて利用します。
+
+ビルド前に一度だけ実行してください（兄弟ディレクトリ `../wanakana-kmp` に clone され、Maven Local へ publish されます）。
+
+```sh
+make setup-wanakana
+```
+
+upstream PR がマージ・リリースされたら、`gradle/libs.versions.toml` の `wanakana` バージョンを正式版へ更新し、`settings.gradle.kts` の `mavenLocal()`・`make setup-wanakana`・fork clone を撤去できます。
+
 ## macOS ブートストラップ確認
 
 ```sh

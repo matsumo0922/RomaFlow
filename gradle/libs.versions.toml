@@ -80,6 +80,9 @@ twitterComposeRule = "0.0.26"
 # Debugs
 napier = "2.7.1"
 
+# Japanese input (WanaKana macosArm64 fork — upstream PR マージまでの暫定)
+wanakana = "1.1.1-romaflow-SNAPSHOT"
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "gradle" }
 android-library = { id = "com.android.library", version.ref = "gradle" }
@@ -115,6 +118,9 @@ kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect" }
 kotlinx-datetime = { group = "org.jetbrains.kotlinx", name = "kotlinx-datetime", version.ref = "kotlinxDatetime" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 kotlinx-collections-immutable = { group = "org.jetbrains.kotlinx", name = "kotlinx-collections-immutable", version.ref = "kotlinxImmutable" }
+
+# Japanese input
+wanakana = { module = "io.github.greattusk:wanakana-common", version.ref = "wanakana" }
 
 # AndroidX
 androidx-core = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
