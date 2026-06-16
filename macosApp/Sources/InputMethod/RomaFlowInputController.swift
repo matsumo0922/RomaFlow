@@ -9,6 +9,7 @@ final class RomaFlowInputController: IMKInputController {
 
     // 入力経路を handle(_:client:) に一本化するためのキーコード定数 (US 配列基準の物理キー番号)
     private let keyCodeReturn = 36
+
     private let keyCodeKeypadEnter = 76
     private let keyCodeEscape = 53
     private let keyCodeDelete = 51
@@ -61,12 +62,19 @@ final class RomaFlowInputController: IMKInputController {
 
     // 印字可能な文字を engine に渡し、変換後のかなを未確定 (marked) テキストとして表示する
     private func handlePrintable(_ event: NSEvent, client: IMKTextInput) -> Bool {
-        guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else {
+        // Shift を反映した実際の入力文字が必要なので characters を使う (charactersIgnoringModifiers だと
+        // Shift+A が "a" になり大文字を入力できない)。Cmd / Ctrl / Option は handle 側で弾いている。
+        guard let characters = event.characters, !characters.isEmpty else {
             return false
         }
 
         let containsControlCharacters = characters.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
         if containsControlCharacters {
+            return false
+        }
+
+        // 未入力状態の space はアプリにそのまま空白を入れさせる (空の marked text を出さない)
+        if characters == " ", !engine.hasComposition() {
             return false
         }
 

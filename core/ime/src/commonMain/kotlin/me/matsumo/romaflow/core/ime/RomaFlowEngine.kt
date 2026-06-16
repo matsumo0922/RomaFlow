@@ -18,7 +18,7 @@ class RomaFlowEngine {
     fun inputRomaji(text: String): String {
         romajiBuffer.append(text)
 
-        return currentKana()
+        return displayKana()
     }
 
     fun deleteBackward(): String {
@@ -26,11 +26,11 @@ class RomaFlowEngine {
             romajiBuffer.deleteAt(romajiBuffer.length - 1)
         }
 
-        return currentKana()
+        return displayKana()
     }
 
     fun commit(): String {
-        val committedKana = currentKana()
+        val committedKana = converter.toKana(romajiBuffer.toString(), finalizeTrailing = true)
         romajiBuffer.clear()
 
         return committedKana
@@ -44,8 +44,8 @@ class RomaFlowEngine {
         return romajiBuffer.isNotEmpty()
     }
 
-    private fun currentKana(): String {
-        return converter.toKana(romajiBuffer.toString())
+    private fun displayKana(): String {
+        return converter.toKana(romajiBuffer.toString(), finalizeTrailing = false)
     }
 
     private fun buildSmokeText(platformName: String): String {

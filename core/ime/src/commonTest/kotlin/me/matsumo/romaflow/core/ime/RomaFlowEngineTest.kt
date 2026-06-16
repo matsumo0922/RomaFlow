@@ -24,10 +24,34 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun inputRomaji_handlesSyllabicNUsingImeRule() {
+        val engine = RomaFlowEngine()
+
+        // IME モードなので nn→ん が効き、こんんにちは ではなく こんにちは になる
+        assertEquals("こんにちは", engine.inputRomaji("konnnitiha"))
+    }
+
+    @Test
     fun inputRomaji_convertsPunctuation() {
         val engine = RomaFlowEngine()
 
         assertEquals("。", engine.inputRomaji("."))
+    }
+
+    @Test
+    fun inputRomaji_keepsUppercaseWordAsLatin() {
+        val engine = RomaFlowEngine()
+
+        // 大文字始まりの塊は英単語として Latin のまま残し、空白以降の小文字はかな変換する
+        assertEquals("Tokyo です", engine.inputRomaji("Tokyo desu"))
+    }
+
+    @Test
+    fun inputRomaji_defersTrailingNWhileTyping() {
+        val engine = RomaFlowEngine()
+
+        // 入力途中は末尾の単独 n を保留する
+        assertEquals("おn", engine.inputRomaji("on"))
     }
 
     @Test
@@ -49,13 +73,23 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun commit_resolvesTrailingNAndClearsBuffer() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("on")
+
+        // 確定時は保留していた末尾 n を ん へ解決する
+        assertEquals("おん", engine.commit())
+        assertFalse(engine.hasComposition())
+        assertEquals("あ", engine.inputRomaji("a"))
+    }
+
+    @Test
     fun commit_returnsKanaAndClearsBuffer() {
         val engine = RomaFlowEngine()
         engine.inputRomaji("nihon")
 
         assertEquals("にほん", engine.commit())
         assertFalse(engine.hasComposition())
-        assertEquals("あ", engine.inputRomaji("a"))
     }
 
     @Test
