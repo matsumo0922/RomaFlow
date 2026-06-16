@@ -41,9 +41,10 @@ PDF を差し替えたときは、`source_pages_total`・page block 数・`sourc
 実装を行う場合は、必ず worktree を作成し、デフォルトディレクトリを汚さない。read-only の調査やビルド・テストの実行はこの限りでない。
 
 ```bash
-git worktree add ../OneNavi-<task-slug> -b <branch-name>
-cp -p local.properties ../OneNavi-<task-slug>/local.properties
-cd ../OneNavi-<task-slug>
+git fetch origin main
+git worktree add ../RomaFlow-<task-slug> -b <branch-name> origin/main
+cp -p local.properties ../RomaFlow-<task-slug>/local.properties
+cd ../RomaFlow-<task-slug>
 ```
 
 - `local.properties` は git 管理外なので、`git worktree add` ではコピーされない。Android SDK
@@ -52,6 +53,18 @@ cd ../OneNavi-<task-slug>
 - `local.properties` の内容は tracked file、コミットメッセージ、PR 本文、issue コメントへ
   転記しない。worktree ごとに必要な差分がある場合も、各 worktree 内の `local.properties`
   だけを編集する。
+- macOS IME / InputMethodKit / reference を読む作業では、`reading-notes.txt` や page image
+  も git 管理外なので、元 checkout から reference 一式をコピーする。
+
+```bash
+mkdir -p ../RomaFlow-<task-slug>/docs/ref
+cp -p docs/ref/inside-input-method-1.1.0.pdf ../RomaFlow-<task-slug>/docs/ref/
+cp -a docs/ref/inside-input-method ../RomaFlow-<task-slug>/docs/ref/
+```
+
+- `docs/ref/inside-input-method-1.1.0.pdf` と `docs/ref/inside-input-method/` は commit
+  しない。コピー元に `docs/ref/inside-input-method/notes/reading-notes.txt` がない場合は、
+  自動生成では復元できない手書きノートなので、上書きせず所在を確認する。
 
 ---
 
