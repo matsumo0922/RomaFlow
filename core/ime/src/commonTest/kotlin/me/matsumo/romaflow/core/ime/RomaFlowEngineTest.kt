@@ -112,4 +112,71 @@ class RomaFlowEngineTest {
 
         assertTrue(engine.hasComposition())
     }
+
+    @Test
+    fun convert_runsProviderAndEntersConvertedState() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("nihongo")
+
+        // FakeConversionProvider の変換表により にほんご→日本語 になる
+        assertEquals("日本語", engine.convert())
+        assertTrue(engine.isConverted())
+    }
+
+    @Test
+    fun convert_onEmptyBufferReturnsEmptyAndStaysUnconverted() {
+        val engine = RomaFlowEngine()
+
+        assertEquals("", engine.convert())
+        assertFalse(engine.isConverted())
+    }
+
+    @Test
+    fun commit_returnsConvertedTextWhenConverted() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("kanji")
+        engine.convert()
+
+        // 変換済み状態の確定は変換結果をそのまま返す (WYSIWYG)
+        assertEquals("漢字", engine.commit())
+        assertFalse(engine.hasComposition())
+        assertFalse(engine.isConverted())
+    }
+
+    @Test
+    fun deleteBackward_revertsConversionToKana() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("kanji")
+        engine.convert()
+
+        // 変換済み状態の Backspace は変換を取り消し、かな表示へ戻す (文字は削らない)
+        assertEquals("かんじ", engine.deleteBackward())
+        assertFalse(engine.isConverted())
+        assertTrue(engine.hasComposition())
+    }
+
+    @Test
+    fun inputRomaji_clearsConvertedStateWhenTypingAfterConversion() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("watasi")
+        engine.convert()
+        assertTrue(engine.isConverted())
+
+        // 変換済み状態で追加入力が来たら変換フラグを解除する (commit は呼び出し側が先に行う想定)
+        engine.inputRomaji("a")
+
+        assertFalse(engine.isConverted())
+    }
+
+    @Test
+    fun cancel_clearsConvertedState() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("toukyou")
+        engine.convert()
+
+        engine.cancel()
+
+        assertFalse(engine.hasComposition())
+        assertFalse(engine.isConverted())
+    }
 }

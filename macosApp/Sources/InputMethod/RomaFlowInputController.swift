@@ -13,6 +13,7 @@ final class RomaFlowInputController: IMKInputController {
     private let keyCodeKeypadEnter = 76
     private let keyCodeEscape = 53
     private let keyCodeDelete = 51
+    private let keyCodeTab = 48
 
     // insertText / setMarkedText で「置換範囲を指定しない」ことを示す range
     private let notFoundRange = NSRange(location: NSNotFound, length: 0)
@@ -36,6 +37,8 @@ final class RomaFlowInputController: IMKInputController {
             return cancelComposition(with: client)
         case keyCodeDelete:
             return handleBackspace(with: client)
+        case keyCodeTab:
+            return handleConvert(with: client)
         default:
             break
         }
@@ -83,6 +86,12 @@ final class RomaFlowInputController: IMKInputController {
             return false
         }
 
+        // 変換済み状態での追加入力は、表示中の変換結果を WYSIWYG で確定してから新しい入力を始める
+        if engine.isConverted() {
+            let committed = engine.commit()
+            client.insertText(committed, replacementRange: notFoundRange)
+        }
+
         // 未入力状態の space はアプリにそのまま空白を入れさせる (空の marked text を出さない)
         if characters == " ", !engine.hasComposition() {
             return false
@@ -90,6 +99,19 @@ final class RomaFlowInputController: IMKInputController {
 
         let kana = engine.inputRomaji(text: characters)
         updateMarkedText(kana, client: client)
+
+        return true
+    }
+
+    // Tab: 未確定かなを ConversionProvider で変換し、結果を marked テキストとして表示する。
+    // 未確定でなければ false を返し、通常の Tab としてアプリ側に流す。
+    private func handleConvert(with client: IMKTextInput) -> Bool {
+        guard engine.hasComposition() else {
+            return false
+        }
+
+        let converted = engine.convert()
+        updateMarkedText(converted, client: client)
 
         return true
     }
