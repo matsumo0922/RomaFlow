@@ -59,6 +59,9 @@ else
   git clone --branch "$BRANCH" "$REPO_URL" "$CLONE_DIR"
 fi
 
+echo "==> copy local.properties"
+cp "$REPO_ROOT/local.properties" "$CLONE_DIR"
+
 echo "==> overriding version to $VERSION (clone working tree only)"
 /usr/bin/sed -i '' -E "s/^version = \".*\"/version = \"$VERSION\"/" "$CLONE_DIR/wanakana-core/build.gradle.kts"
 
