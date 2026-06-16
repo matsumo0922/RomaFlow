@@ -21,6 +21,13 @@ import kotlinx.serialization.json.Json
  * リクエストは互換性最優先で最小限（model と messages のみ）にし、OpenAI・Gemini 互換・ローカル LLM で
  * 同じ経路が通るようにする。失敗時（API key 未設定・通信エラー・タイムアウト等）は空文字を返し、
  * 呼び出し側で「変換せず据え置き」として扱う。
+ *
+ * 【暫定実装の注意】これは「全文を LLM に丸ごと変換させる」方式で、応答崩れ（前置き・引用符・markdown・
+ * hallucination）への防御を意図的に入れていない。最終的には「従来のかな漢字変換器で候補を複数生成し、
+ * LLM はその候補集合から index を選ぶ（rerank）」方式へ移行する予定で、その時点で出力空間が候補集合に
+ * 制約され、Structured Outputs（index 返し）で崩れを構造的に解消する。それまでの繋ぎなので、
+ * プロンプト強化・サニタイズ・Structured Outputs はここでは未実装のままとする。
+ * 参考: Sumibi（プロンプト + API n で複数候補）, azooKey/Zenzai（従来変換器を draft とした投機的デコード）。
  */
 internal class OpenAiConversionProvider(
     private val config: OpenAiConfig,
