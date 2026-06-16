@@ -22,6 +22,24 @@ fail() {
   exit 1
 }
 
+run_quietly() {
+  local description="$1"
+  local command_log
+
+  shift
+  command_log="$(mktemp -t romaflow-command)"
+
+  if "$@" >"${command_log}" 2>&1; then
+    rm -f "${command_log}"
+    return
+  fi
+
+  printf 'error: %s failed.\n' "${description}" >&2
+  printf 'error: Raw log: %s\n' "${command_log}" >&2
+  cat "${command_log}" >&2
+  exit 1
+}
+
 require_command() {
   local command_name="$1"
 
@@ -42,7 +60,7 @@ build_input_method() {
     -target RomaFlowInputMethod \
     -configuration Debug \
     build \
-    2>&1 | tee "${build_log}" | "${formatter_command}"; then
+    2>&1 | tee "${build_log}" | "${formatter_command}" --quiet --disable-logging; then
     printf 'error: xcodebuild failed. Raw log: %s\n' "${build_log}" >&2
     exit 1
   fi
@@ -60,17 +78,17 @@ install_input_method() {
   cp -R "${built_app}" "${ime_install_dir}/"
 
   log_step "Signing installed app"
-  codesign --force --sign - --deep "${ime_app}"
+  run_quietly "codesign" codesign --force --sign - --deep "${ime_app}"
 
   log_step "Registering input source"
-  "${ime_app}/Contents/MacOS/RomaFlow" --register-input-source
+  run_quietly "input source registration" "${ime_app}/Contents/MacOS/RomaFlow" --register-input-source
 
   log_step "Enabling input source"
-  "${ime_app}/Contents/MacOS/RomaFlow" --enable-input-source
+  run_quietly "input source enabling" "${ime_app}/Contents/MacOS/RomaFlow" --enable-input-source
 
   # LaunchServices 登録がないと入力ソースの選択が永続化されず、メニューバーにも反映されない。
   log_step "Registering app with LaunchServices"
-  "${lsregister}" -f "${ime_app}"
+  run_quietly "LaunchServices registration" "${lsregister}" -f "${ime_app}"
 
   log_step "Refreshing input menu agent"
   killall TextInputMenuAgent >/dev/null 2>&1 || true
