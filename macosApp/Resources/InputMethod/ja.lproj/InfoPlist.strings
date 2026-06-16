@@ -3,4 +3,3 @@
 CFBundleName = "RomaFlow";
 
 "com.apple.inputmethod.Japanese" = "RomaFlow (日本語)";
-"com.apple.inputmethod.Roman" = "RomaFlow (英数)";

@@ -21,6 +21,23 @@ targetTemplates:
         ENABLE_USER_SCRIPT_SANDBOXING: "NO"
         # :core:ime は macosArm64 のみ対応のため、CLI ビルドで x86_64 が要求されないように固定する
         ARCHS: arm64
+        # kotlinx-io (WanaKana の推移的依存) が Kotlin/Native の posix-cache を引き込み、その中に
+        # Linux 専用の scandirat / fdscandir / fdclosedir ラッパーが含まれる。これらは macOS の libc に
+        # 存在せずリンクに失敗するが、romaji→kana 変換はファイルシステムを触らないため実行時には呼ばれない。
+        # 該当シンボルのみ未定義を許可してリンクを通す。
+        OTHER_LDFLAGS:
+          - -Xlinker
+          - -U
+          - -Xlinker
+          - _scandirat
+          - -Xlinker
+          - -U
+          - -Xlinker
+          - _fdscandir
+          - -Xlinker
+          - -U
+          - -Xlinker
+          - _fdclosedir
     preBuildScripts:
       - name: Embed Swift Export
         basedOnDependencyAnalysis: false
@@ -82,11 +99,11 @@ targets:
           - Hira
           - Kana
         tsInputMethodIconFileKey: main.tiff
-        # Apple の canonical mode ID を使うと、システム設定の「日本語」「英語」カテゴリに表示される (azooKey 方式)
+        # Apple の canonical mode ID を使うと、システム設定の「日本語」カテゴリに表示される (azooKey 方式)。
+        # 英語入力は別 input source (ABC) に任せるため、英数 (Roman) モードは提供しない。
         ComponentInputModeDict:
           tsVisibleInputModeOrderedArrayKey:
             - com.apple.inputmethod.Japanese
-            - com.apple.inputmethod.Roman
           tsInputModeListKey:
             com.apple.inputmethod.Japanese:
               TISInputSourceID: me.matsumo.inputmethod.RomaFlow.Japanese
@@ -99,14 +116,3 @@ targets:
               tsInputModeMenuIconFileKey: main.tiff
               tsInputModeAlternateMenuIconFileKey: main.tiff
               tsInputModePaletteIconFileKey: main.tiff
-            com.apple.inputmethod.Roman:
-              TISInputSourceID: me.matsumo.inputmethod.RomaFlow.Roman
-              TISIntendedLanguage: en
-              TISIconIsTemplate: true
-              tsInputModePrimaryInScriptKey: false
-              tsInputModeScriptKey: smRoman
-              tsInputModeDefaultStateKey: true
-              tsInputModeIsVisibleKey: true
-              tsInputModeMenuIconFileKey: en.tiff
-              tsInputModeAlternateMenuIconFileKey: en.tiff
-              tsInputModePaletteIconFileKey: en.tiff
