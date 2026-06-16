@@ -1,6 +1,6 @@
 #!/usr/bin/make -f
 
-.PHONY: generate detekt reference-inside-input-method install-ime uninstall-ime
+.PHONY: generate detekt setup-wanakana reference-inside-input-method install-ime uninstall-ime
 
 XCODEPROJ := macosApp/RomaFlowMacOS.xcodeproj
 IME_INSTALL_DIR := $(HOME)/Library/Input Methods
@@ -12,6 +12,11 @@ generate:
 
 detekt:
 	./gradlew detekt --auto-correct --continue
+
+# WanaKana の macosArm64 対応 fork を兄弟ディレクトリに clone/更新し、Maven Local へ publish する。
+# upstream PR (GreatTusk/wanakana-kmp#1) がマージ・リリースされるまでの暫定セットアップ。
+setup-wanakana:
+	scripts/build_wanakana_fork.sh
 
 reference-inside-input-method:
 	@if [ -n "$(PAGE)" ]; then \

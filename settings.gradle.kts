@@ -22,6 +22,13 @@ dependencyResolutionManagement {
         mavenCentral()
         maven("https://storage.googleapis.com/r8-releases/raw")
         maven("https://jitpack.io")
+        // WanaKana の macosArm64 対応 fork を Maven Local から解決する暫定措置。
+        // upstream PR (GreatTusk/wanakana-kmp#1) がマージ・リリースされたら撤去する。`make setup-wanakana` を参照。
+        mavenLocal {
+            content {
+                includeGroup("io.github.greattusk")
+            }
+        }
     }
 }
 
