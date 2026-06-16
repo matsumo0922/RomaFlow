@@ -83,6 +83,9 @@ napier = "2.7.1"
 # Japanese input (WanaKana macosArm64 fork — upstream PR マージまでの暫定)
 wanakana = "1.1.1-romaflow-SNAPSHOT"
 
+# Japanese morphology (momiji: Pure Kotlin MeCab 互換解析器・KMP/macosArm64 対応・MIT)
+momiji = "0.0.2"
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "gradle" }
 android-library = { id = "com.android.library", version.ref = "gradle" }
@@ -121,6 +124,10 @@ kotlinx-collections-immutable = { group = "org.jetbrains.kotlinx", name = "kotli
 
 # Japanese input
 wanakana = { module = "io.github.greattusk:wanakana-common", version.ref = "wanakana" }
+
+# Japanese morphology
+momiji-core = { module = "io.github.tokuhirom.momiji:momiji-core", version.ref = "momiji" }
+momiji-ipadic = { module = "io.github.tokuhirom.momiji:momiji-ipadic", version.ref = "momiji" }
 
 # AndroidX
 androidx-core = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
