@@ -18,6 +18,9 @@ class RomaFlowEngine internal constructor(
     // Tab 変換後の表示テキスト。null の間は未変換かな状態を表す。
     private var convertedText: String? = null
 
+    // 変換済み状態で候補ウィンドウへ提示する候補リスト。未変換のときは空。
+    private var candidates: List<String> = emptyList()
+
     /** Swift Export / 本番経路向けに [FakeConversionProvider] を使う既定の constructor。 */
     constructor() : this(FakeConversionProvider())
 
@@ -27,7 +30,7 @@ class RomaFlowEngine internal constructor(
 
     fun inputRomaji(text: String): String {
         // 変換済み状態からの追加入力は呼び出し側が commit してから渡す想定。念のため変換状態を解除する。
-        convertedText = null
+        resetConversion()
         romajiBuffer.append(text)
 
         return displayKana()
@@ -36,7 +39,7 @@ class RomaFlowEngine internal constructor(
     fun deleteBackward(): String {
         // 変換済み状態での Backspace は変換を取り消し、raw 編集できるかな状態へ戻す。
         if (convertedText != null) {
-            convertedText = null
+            resetConversion()
 
             return displayKana()
         }
@@ -53,10 +56,28 @@ class RomaFlowEngine internal constructor(
             return ""
         }
 
-        val converted = conversionProvider.convert(finalizedKana())
-        convertedText = converted
+        val reading = finalizedKana()
+        val bestConversion = conversionProvider.convert(reading)
+        candidates = buildCandidates(bestConversion, reading)
+        convertedText = bestConversion
 
-        return converted
+        return bestConversion
+    }
+
+    fun candidatesText(): String {
+        // 候補ウィンドウへ渡す候補リスト。Swift Export 越しに List を出さず改行区切りの String にする。
+        return candidates.joinToString("\n")
+    }
+
+    fun hasMultipleCandidates(): Boolean {
+        return candidates.size > 1
+    }
+
+    fun commitCandidate(text: String): String {
+        // 候補ウィンドウで選択された候補を確定する。表示文字列をそのまま受け取り WYSIWYG で確定する。
+        clearState()
+
+        return text
     }
 
     fun commit(): String {
@@ -87,12 +108,53 @@ class RomaFlowEngine internal constructor(
         return converter.toKana(romajiBuffer.toString(), finalizeTrailing = true)
     }
 
+    private fun buildCandidates(bestConversion: String, reading: String): List<String> {
+        // 変換結果・ひらがな読み・カタカナ読みを重複なく並べる。読みと一致する候補は distinct で畳む。
+        return listOf(bestConversion, reading, toKatakana(reading)).distinct()
+    }
+
+    private fun toKatakana(hiragana: String): String {
+        val katakana = StringBuilder(hiragana.length)
+
+        for (character in hiragana) {
+            katakana.append(toKatakanaChar(character))
+        }
+
+        return katakana.toString()
+    }
+
+    private fun toKatakanaChar(character: Char): Char {
+        val codePoint = character.code
+
+        if (codePoint in HIRAGANA_BLOCK_START..HIRAGANA_BLOCK_END) {
+            return (codePoint + HIRAGANA_TO_KATAKANA_OFFSET).toChar()
+        }
+
+        return character
+    }
+
+    private fun resetConversion() {
+        convertedText = null
+        candidates = emptyList()
+    }
+
     private fun clearState() {
         romajiBuffer.clear()
-        convertedText = null
+        resetConversion()
     }
 
     private fun buildSmokeText(platformName: String): String {
         return "RomaFlow $platformName connected"
+    }
+
+    private companion object {
+        /** ひらがなブロックの開始コードポイント（U+3041 ぁ）。 */
+        const val HIRAGANA_BLOCK_START = 0x3041
+
+        /** ひらがなブロックの終了コードポイント（U+3096 ゖ）。 */
+        const val HIRAGANA_BLOCK_END = 0x3096
+
+        /** ひらがなからカタカナへ変換するときのコードポイント差分。 */
+        const val HIRAGANA_TO_KATAKANA_OFFSET = 0x60
     }
 }

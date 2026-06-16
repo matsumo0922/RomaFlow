@@ -179,4 +179,85 @@ class RomaFlowEngineTest {
         assertFalse(engine.hasComposition())
         assertFalse(engine.isConverted())
     }
+
+    @Test
+    fun convert_buildsKanjiKanaKatakanaCandidates() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("nihongo")
+        engine.convert()
+
+        // 変換結果・ひらがな読み・カタカナ読みが改行区切りで並ぶ
+        assertEquals("日本語\nにほんご\nニホンゴ", engine.candidatesText())
+        assertTrue(engine.hasMultipleCandidates())
+    }
+
+    @Test
+    fun convert_offersKanaAndKatakanaWhenNoKanjiConversion() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("sushi")
+        engine.convert()
+
+        // 変換表に無い読みは変換結果がひらがなと一致するため、ひらがなとカタカナの2候補に畳まれる
+        assertEquals("すし\nスシ", engine.candidatesText())
+        assertTrue(engine.hasMultipleCandidates())
+    }
+
+    @Test
+    fun convert_collapsesToSingleCandidateForLatinWord() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("Tokyo")
+        engine.convert()
+
+        // ひらがなを含まない Latin 語は3候補すべてが一致するため1候補に畳まれる
+        assertEquals("Tokyo", engine.candidatesText())
+        assertFalse(engine.hasMultipleCandidates())
+    }
+
+    @Test
+    fun candidatesText_isEmptyWhenNotConverted() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("nihongo")
+
+        // Tab 変換前は候補が存在しない
+        assertEquals("", engine.candidatesText())
+        assertFalse(engine.hasMultipleCandidates())
+    }
+
+    @Test
+    fun commitCandidate_commitsGivenTextAndClearsState() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("nihongo")
+        engine.convert()
+
+        // 候補ウィンドウで選ばれた候補 (ここではカタカナ) をそのまま確定する
+        assertEquals("ニホンゴ", engine.commitCandidate("ニホンゴ"))
+        assertFalse(engine.hasComposition())
+        assertFalse(engine.isConverted())
+        assertEquals("", engine.candidatesText())
+    }
+
+    @Test
+    fun commit_clearsCandidates() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("kanji")
+        engine.convert()
+
+        engine.commit()
+
+        assertEquals("", engine.candidatesText())
+        assertFalse(engine.hasMultipleCandidates())
+    }
+
+    @Test
+    fun deleteBackward_clearsCandidatesWhenRevertingConversion() {
+        val engine = RomaFlowEngine()
+        engine.inputRomaji("nihongo")
+        engine.convert()
+
+        engine.deleteBackward()
+
+        // 変換取り消しで候補も消える
+        assertEquals("", engine.candidatesText())
+        assertFalse(engine.hasMultipleCandidates())
+    }
 }
