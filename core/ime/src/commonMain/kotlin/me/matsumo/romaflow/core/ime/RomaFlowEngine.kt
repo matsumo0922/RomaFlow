@@ -5,7 +5,7 @@ package me.matsumo.romaflow.core.ime
  *
  * IMKInputController インスタンスごとに1つ生成され、未確定のローマ字 buffer と Tab 変換後の状態を保持する。
  * 「未変換かな」と「変換済み」の2状態を持つ簡易 state machine として振る舞う。
- * 公開 API は Swift Export の保守的な制約に合わせ String / Boolean のみを受け渡しする。
+ * 公開 API は Swift Export に合わせ String / Boolean / suspend のみを受け渡しする（List は出さない）。
  */
 class RomaFlowEngine internal constructor(
     private val conversionProvider: ConversionProvider,
@@ -21,8 +21,8 @@ class RomaFlowEngine internal constructor(
     // 変換済み状態で候補ウィンドウへ提示する候補リスト。未変換のときは空。
     private var candidates: List<String> = emptyList()
 
-    /** Swift Export / 本番経路向けに [FakeConversionProvider] を使う既定の constructor。 */
-    constructor() : this(FakeConversionProvider())
+    /** Swift Export / 本番経路向けに既定の AI [ConversionProvider] を使う constructor。 */
+    constructor() : this(defaultConversionProvider())
 
     fun smokeText(): String {
         return buildSmokeText("KMP")
@@ -51,17 +51,28 @@ class RomaFlowEngine internal constructor(
         return displayKana()
     }
 
-    fun convert(): String {
+    suspend fun convert(): String {
+        // サスペンド前に main で読みを確定し、その後 provider をネットワーク呼び出しする。
+        // 状態はここでは変えない（結果適用は applyConversion で main から行い、競合を避ける）。
         if (romajiBuffer.isEmpty()) {
             return ""
         }
 
         val reading = finalizedKana()
-        val bestConversion = conversionProvider.convert(reading)
-        candidates = buildCandidates(bestConversion, reading)
-        convertedText = bestConversion
 
-        return bestConversion
+        return conversionProvider.convert(reading)
+    }
+
+    fun applyConversion(result: String): String {
+        // convert() の結果を main スレッドで状態へ反映する。失敗(空文字)や buffer 消失時は据え置く。
+        if (result.isEmpty() || romajiBuffer.isEmpty()) {
+            return ""
+        }
+
+        candidates = buildCandidates(result, finalizedKana())
+        convertedText = result
+
+        return result
     }
 
     fun candidatesText(): String {
