@@ -117,6 +117,18 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun finalizePendingRomaji_resolvesTrailingNAndMatchesCommit() {
+        val engine = newEngine()
+        engine.inputRomaji("on")
+
+        // Tab 起点の finalize で末尾 n を ん へ解決し、表示用 preedit を返す（おn→おん）。
+        assertEquals("おん", engine.finalizePendingRomaji())
+
+        // finalize 後（=変換失敗・キャンセル相当）の commit は表示と一致する。
+        assertEquals("おん", engine.commit())
+    }
+
+    @Test
     fun convert_runsProviderAndEntersConvertedState() = runTest {
         val engine = newEngine()
         engine.inputRomaji("nihongo")

@@ -67,17 +67,26 @@ class RomaFlowEngine internal constructor(
         return preeditText()
     }
 
+    fun finalizePendingRomaji(): String {
+        // Tab の起点で pendingRomaji を確定かなへ移し、境界を固定する（lone n→ん 等）。
+        // 非同期変換が失敗・空・キャンセルでも表示中の marked text と commit 内容を一致させるため、
+        // Swift 側はこの戻り値を即 setMarkedText して await 中のかな表示を確定後のかなへ揃える。
+        applyPendingFinalization()
+
+        return preeditText()
+    }
+
     suspend fun convert(): String {
         // サスペンド前に main で pendingRomaji を確定し、Tab の境界を固定する（lone n→ん 等）。
         // segment への反映は applyConversion で main から行い、競合を避ける（#15 の二段構え）。
-        val finalized = converter.finalize(draft.input.pendingRomaji)
-        val readingInput = draft.input.readingInput + finalized
+        applyPendingFinalization()
+
+        val readingInput = draft.input.readingInput
 
         if (readingInput.isEmpty()) {
             return ""
         }
 
-        draft = draft.copy(input = InputBuffer(readingInput, ""))
         pendingConversionRevision = inputRevision
 
         val request = ConversionRequest(readingInput, emptyList())
@@ -181,6 +190,13 @@ class RomaFlowEngine internal constructor(
 
     fun isConverted(): Boolean {
         return draft.segments.isNotEmpty()
+    }
+
+    private fun applyPendingFinalization() {
+        val finalized = converter.finalize(draft.input.pendingRomaji)
+        val readingInput = draft.input.readingInput + finalized
+
+        draft = draft.copy(input = InputBuffer(readingInput, ""))
     }
 
     private fun deletePendingTail() {
