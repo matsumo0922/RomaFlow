@@ -48,8 +48,13 @@ final class RomaFlowInputController: IMKInputController {
         case keyCodeTab:
             return handleConvert(event, client: client)
         case keyCodeArrowLeft:
+            // 修飾付き ←（Cmd+← 等）は単語選択ではなくアプリ側 shortcut なので下の commit→pass-through へ流す。
+            if hasCommandLikeModifier(event) { break }
+
             return handleMoveSelection(toRight: false, client: client)
         case keyCodeArrowRight:
+            if hasCommandLikeModifier(event) { break }
+
             return handleMoveSelection(toRight: true, client: client)
         default:
             break
@@ -58,9 +63,7 @@ final class RomaFlowInputController: IMKInputController {
         // Cmd / Ctrl / Option を伴うキーはアプリ側 shortcut なので IME では処理しない。
         // ただし active composition があるときは marked text と engine state を残さないよう、
         // WYSIWYG で確定してから pass-through する (issue #8)。
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let hasCommandLikeModifier = !modifiers.intersection([.command, .control, .option]).isEmpty
-        if hasCommandLikeModifier {
+        if hasCommandLikeModifier(event) {
             _ = performCommit(with: client)
 
             return false
@@ -95,6 +98,13 @@ final class RomaFlowInputController: IMKInputController {
 
         cancelPendingConversion()
         _ = performCommit(with: client)
+    }
+
+    // Cmd / Ctrl / Option のいずれかを伴うか（アプリ側 shortcut とみなす修飾キー判定）。
+    private func hasCommandLikeModifier(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        return !modifiers.intersection([.command, .control, .option]).isEmpty
     }
 
     // 印字可能な文字を engine に渡し、変換後の preedit を未確定 (marked) テキストとして表示する。
@@ -171,6 +181,12 @@ final class RomaFlowInputController: IMKInputController {
     // AI 変換を実行し、結果を main スレッドで状態へ反映する。失敗・キャンセル・空結果は据え置く。
     @MainActor
     private func runConversion(client: IMKTextInput) async {
+        // engine.convert() は冒頭で pendingRomaji を finalize して状態を変える。後続入力で cancel 済みの
+        // 古い Task が convert() に入り、新しい pendingRomaji を確定してしまわないよう、呼び出し前に弾く。
+        if Task.isCancelled {
+            return
+        }
+
         let result = (try? await engine.convert()) ?? ""
 
         if Task.isCancelled || result.isEmpty {
