@@ -7,11 +7,14 @@ package me.matsumo.romaflow.core.ime
  * 単語選択）を持つ。入力は 2 レイヤに分かれ、romaji→kana は末尾の pendingRomaji にだけ増分適用し、
  * 確定したかなは readingInput に frozen として積む。kana→kanji は Tab 起動で readingInput 全体を
  * provider（call1）に投入する。この分離により、Tab 変換後に追記しても確定済みのかなが再解釈されない。
- * 公開 API は Swift Export に合わせ String / Int / Boolean / suspend のみを受け渡しする（List は出さない）。
+ * 変換結果の各 segment は [ReadingAligner] で readingInput 上の [TextRange] に対応付け、per-segment の
+ * revert・削除を range 単位で扱う。公開 API は Swift Export に合わせ String / Int / Boolean / suspend のみを
+ * 受け渡しする（List は出さない）。
  */
 class RomaFlowEngine internal constructor(
     private val conversionProvider: ConversionProvider,
     private val segmenter: Segmenter,
+    private val aligner: ReadingAligner,
 ) {
 
     private val converter = RomajiKanaConverter()
@@ -22,18 +25,14 @@ class RomaFlowEngine internal constructor(
         selection = Selection.None,
     )
 
-    // 変換済 segments が読みとしてカバーする readingInput の文字数（UTF-16 code unit）。
-    // 変換済領域と未変換かな tail の境界で、range=null の B1a ではこの 1 値で境界を管理する。
-    private var convertedReadingLength = 0
-
     // 入力状態のリビジョン。入力を変える操作のたびに増やし、非同期変換の stale 判定に使う。
     private var inputRevision = 0
 
     // 実行中の変換要求が発行されたときの入力リビジョン。結果適用時にこれが現在値と一致するか確認する。
     private var pendingConversionRevision = -1
 
-    /** Swift Export / 本番経路向けに既定の AI provider と momiji segmenter を使う constructor。 */
-    constructor() : this(defaultConversionProvider(), MomijiSegmenter())
+    /** Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner を使う constructor。 */
+    constructor() : this(defaultConversionProvider(), MomijiSegmenter(), DpReadingAligner())
 
     fun smokeText(): String {
         return buildSmokeText("KMP")
@@ -62,7 +61,7 @@ class RomaFlowEngine internal constructor(
             return preeditText()
         }
 
-        deleteFromEnd()
+        deleteFromTargetSegment()
 
         return preeditText()
     }
@@ -105,7 +104,6 @@ class RomaFlowEngine internal constructor(
         }
 
         draft = draft.copy(segments = buildSegments(result), selection = Selection.None)
-        convertedReadingLength = draft.input.readingInput.length
 
         return preeditText()
     }
@@ -122,8 +120,9 @@ class RomaFlowEngine internal constructor(
     fun cancel(): String {
         markInputChanged()
 
-        // 変換済なら segments だけ破棄して打った通りのかな（readingInput）へ戻す。未変換なら全体を破棄する。
-        if (draft.segments.isNotEmpty()) {
+        // 変換済 segment が残るなら segments だけ破棄して打った通りのかな（readingInput）へ戻す。
+        // per-segment revert で全て未変換かなに戻った場合は変換済が無いので、一度の Esc で全体を破棄する。
+        if (isConverted()) {
             revertConversion()
 
             return preeditText()
@@ -189,7 +188,7 @@ class RomaFlowEngine internal constructor(
     }
 
     fun isConverted(): Boolean {
-        return draft.segments.isNotEmpty()
+        return draft.segments.any { it.status != SegmentStatus.Unconverted }
     }
 
     private fun applyPendingFinalization() {
@@ -205,37 +204,133 @@ class RomaFlowEngine internal constructor(
         draft = draft.copy(input = draft.input.copy(pendingRomaji = shortened))
     }
 
-    private fun deleteFromEnd() {
-        val hasUnconvertedTail = draft.input.readingInput.length > convertedReadingLength
+    private fun deleteFromTargetSegment() {
+        val display = displaySegments()
 
-        // 末尾が未変換かな tail ならその 1 かなを削る。tail が無く変換済なら、その変換を打った通りのかなへ戻す
-        // （per-segment 削除は range が必要なため B1b 以降）。どちらでもなければ readingInput 末尾を削る。
-        if (hasUnconvertedTail) {
-            deleteReadingInputTail()
+        if (display.isEmpty()) {
+            return
+        }
+
+        val targetIndex = backspaceTargetIndex(display.size)
+
+        applyBackspaceOnSegment(display[targetIndex])
+    }
+
+    // 選択中ならその segment、未選択なら末尾 segment を backspace 対象にする（優先順位 2/3/4）。
+    private fun backspaceTargetIndex(count: Int): Int {
+        val selection = draft.selection
+
+        if (selection is Selection.Word) {
+            return selection.index.coerceIn(0, count - 1)
+        }
+
+        return count - 1
+    }
+
+    private fun applyBackspaceOnSegment(segment: Segment) {
+        // 未変換は末尾 1 かな削除、変換済は exact なら かなへ revert・不一致なら全体 revert。
+        if (segment.status == SegmentStatus.Unconverted) {
+            deleteSegmentTrailingKana(segment)
 
             return
         }
 
-        if (draft.segments.isNotEmpty()) {
+        revertSegmentOrFallback(segment)
+    }
+
+    private fun revertSegmentOrFallback(segment: Segment) {
+        val range = segment.range
+        val isExactMatch = range != null && range.confidence >= EXACT_MATCH_CONFIDENCE
+
+        // 完全一致時のみ per-segment で打った通りのかなへ戻す。訂正済み（不一致）は range が曖昧なので全体 revert。
+        if (!isExactMatch) {
             revertConversion()
 
             return
         }
 
-        if (draft.input.readingInput.isNotEmpty()) {
-            deleteReadingInputTail()
+        revertSegmentToReading(segment, range)
+    }
+
+    private fun revertSegmentToReading(segment: Segment, range: TextRange) {
+        val targetIndex = draft.segments.indexOf(segment)
+
+        if (targetIndex < 0) {
+            return
+        }
+
+        val kana = draft.input.readingInput.substring(range.startInclusive, range.endExclusive)
+        val reverted = segment.copy(surface = kana, reading = kana, status = SegmentStatus.Unconverted)
+        val updated = draft.segments.toMutableList()
+
+        updated[targetIndex] = reverted
+
+        draft = draft.copy(segments = updated)
+    }
+
+    private fun deleteSegmentTrailingKana(segment: Segment) {
+        val range = segment.range ?: return
+
+        if (range.endExclusive <= range.startInclusive) {
+            return
+        }
+
+        deleteReadingInputCharAt(range.endExclusive - 1)
+    }
+
+    // readingInput の [position] を1文字削り、各 segment の range を追従させる（中間削除では後続が左へ詰まる）。
+    private fun deleteReadingInputCharAt(position: Int) {
+        val readingInput = draft.input.readingInput
+
+        if (position !in readingInput.indices) {
+            return
+        }
+
+        val newReadingInput = readingInput.removeRange(position, position + 1)
+        val shiftedSegments = draft.segments.mapNotNull { shiftSegmentForDeletion(it, position, newReadingInput) }
+        val displayCount = displaySegmentCountFor(shiftedSegments, newReadingInput)
+
+        draft = draft.copy(
+            input = draft.input.copy(readingInput = newReadingInput),
+            segments = shiftedSegments,
+            selection = clampSelection(draft.selection, displayCount),
+        )
+    }
+
+    private fun shiftSegmentForDeletion(segment: Segment, position: Int, newReadingInput: String): Segment? {
+        val range = segment.range ?: return segment
+
+        return when {
+            range.endExclusive <= position -> segment
+            range.startInclusive > position -> shiftSegmentRange(segment, range)
+            else -> shrinkSegmentEnd(segment, range, newReadingInput)
         }
     }
 
-    private fun deleteReadingInputTail() {
-        val shortened = draft.input.readingInput.dropLast(1)
+    private fun shiftSegmentRange(segment: Segment, range: TextRange): Segment {
+        val shifted = range.copy(
+            startInclusive = range.startInclusive - 1,
+            endExclusive = range.endExclusive - 1,
+        )
 
-        draft = draft.copy(input = draft.input.copy(readingInput = shortened), selection = Selection.None)
+        return segment.copy(range = shifted)
+    }
+
+    private fun shrinkSegmentEnd(segment: Segment, range: TextRange, newReadingInput: String): Segment? {
+        val newEnd = range.endExclusive - 1
+
+        if (newEnd <= range.startInclusive) {
+            return null
+        }
+
+        val shrunkRange = range.copy(endExclusive = newEnd)
+        val text = newReadingInput.substring(range.startInclusive, newEnd)
+
+        return segment.copy(surface = text, reading = text, range = shrunkRange)
     }
 
     private fun revertConversion() {
         draft = draft.copy(segments = emptyList(), selection = Selection.None)
-        convertedReadingLength = 0
     }
 
     private fun committedText(): String {
@@ -253,19 +348,17 @@ class RomaFlowEngine internal constructor(
 
     private fun buildSegments(result: String): List<Segment> {
         val tokens = segmenter.segment(result)
+        val effectiveTokens = tokens.ifEmpty { listOf(SegmentToken(result, result)) }
+        val aligned = aligner.align(draft.input.readingInput, effectiveTokens)
 
-        if (tokens.isEmpty()) {
-            return listOf(toConvertedSegment(SegmentToken(result, result)))
-        }
-
-        return tokens.map(::toConvertedSegment)
+        return aligned.map(::toConvertedSegment)
     }
 
-    private fun toConvertedSegment(token: SegmentToken): Segment {
+    private fun toConvertedSegment(aligned: AlignedSegment): Segment {
         return Segment(
-            surface = token.surface,
-            reading = token.reading,
-            range = null,
+            surface = aligned.token.surface,
+            reading = aligned.token.reading,
+            range = aligned.range,
             status = SegmentStatus.Converted,
             candidates = emptyList(),
         )
@@ -296,6 +389,18 @@ class RomaFlowEngine internal constructor(
         return candidate.coerceIn(0, count - 1)
     }
 
+    private fun clampSelection(selection: Selection, displayCount: Int): Selection {
+        if (selection !is Selection.Word) {
+            return selection
+        }
+
+        if (displayCount == 0) {
+            return Selection.None
+        }
+
+        return Selection.Word(selection.index.coerceIn(0, displayCount - 1))
+    }
+
     private fun displaySegments(): List<Segment> {
         val tail = unconvertedTail()
 
@@ -303,9 +408,18 @@ class RomaFlowEngine internal constructor(
             return draft.segments
         }
 
-        val tailSegment = Segment(tail, tail, null, SegmentStatus.Unconverted, emptyList())
+        val start = convertedEnd()
+        val tailRange = TextRange(start, draft.input.readingInput.length, EXACT_MATCH_CONFIDENCE)
+        val tailSegment = Segment(tail, tail, tailRange, SegmentStatus.Unconverted, emptyList())
 
         return draft.segments + tailSegment
+    }
+
+    private fun displaySegmentCountFor(segments: List<Segment>, readingInput: String): Int {
+        val end = convertedEndOf(segments)
+        val hasTail = end < readingInput.length
+
+        return segments.size + if (hasTail) 1 else 0
     }
 
     private fun segmentAt(index: Int): Segment? {
@@ -314,9 +428,18 @@ class RomaFlowEngine internal constructor(
 
     private fun unconvertedTail(): String {
         val readingInput = draft.input.readingInput
-        val boundary = convertedReadingLength.coerceIn(0, readingInput.length)
+        val boundary = convertedEnd().coerceIn(0, readingInput.length)
 
         return readingInput.substring(boundary)
+    }
+
+    // 変換済 segment 群が readingInput 上でカバーする末尾位置。tail との境界に使う。
+    private fun convertedEnd(): Int {
+        return convertedEndOf(draft.segments)
+    }
+
+    private fun convertedEndOf(segments: List<Segment>): Int {
+        return segments.maxOfOrNull { it.range?.endExclusive ?: 0 } ?: 0
     }
 
     private fun buildSmokeText(platformName: String): String {
@@ -329,6 +452,10 @@ class RomaFlowEngine internal constructor(
 
     private fun clearState() {
         draft = ConversionDraft(InputBuffer("", ""), emptyList(), Selection.None)
-        convertedReadingLength = 0
+    }
+
+    private companion object {
+        /** per-segment revert を許可する confidence の下限（完全一致）。 */
+        const val EXACT_MATCH_CONFIDENCE = 1f
     }
 }
