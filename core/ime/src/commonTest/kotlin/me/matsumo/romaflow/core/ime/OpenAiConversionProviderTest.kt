@@ -30,7 +30,7 @@ class OpenAiConversionProviderTest {
         }
         val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
 
-        val converted = provider.convert("にほんご")
+        val converted = provider.convert(conversionRequest("にほんご"))
 
         assertEquals("日本語", converted)
 
@@ -44,7 +44,7 @@ class OpenAiConversionProviderTest {
         val engine = MockEngine { error("API は key 未設定時に呼ばれてはいけない") }
         val provider = OpenAiConversionProvider(testConfig(""), jsonClient(engine))
 
-        assertEquals("", provider.convert("にほんご"))
+        assertEquals("", provider.convert(conversionRequest("にほんご")))
         assertTrue(engine.requestHistory.isEmpty())
     }
 
@@ -54,7 +54,7 @@ class OpenAiConversionProviderTest {
         val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
 
         // 失敗は据え置き。例外は runCatching で握って空文字を返す
-        assertEquals("", provider.convert("にほんご"))
+        assertEquals("", provider.convert(conversionRequest("にほんご")))
     }
 
     @Test
@@ -68,7 +68,7 @@ class OpenAiConversionProviderTest {
         }
         val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
 
-        assertEquals("", provider.convert("にほんご"))
+        assertEquals("", provider.convert(conversionRequest("にほんご")))
     }
 
     private companion object {
@@ -78,6 +78,11 @@ class OpenAiConversionProviderTest {
         const val BLANK_CONTENT_RESPONSE_JSON =
             """{"choices":[{"message":{"role":"assistant","content":"   "}}]}"""
     }
+}
+
+/** readingInput だけを設定した lock 無しの [ConversionRequest]。 */
+private fun conversionRequest(readingInput: String): ConversionRequest {
+    return ConversionRequest(readingInput, emptyList())
 }
 
 /** テスト用の [OpenAiConfig]。 */
