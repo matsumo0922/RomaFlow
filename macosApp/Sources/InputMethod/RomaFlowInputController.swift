@@ -20,6 +20,11 @@ final class RomaFlowInputController: IMKInputController {
     // insertText / setMarkedText で「置換範囲を指定しない」ことを示す range
     private let notFoundRange = NSRange(location: NSNotFound, length: 0)
 
+    // marked text の下線スタイル。未選択 clause は細い実線、選択中 clause は太い実線。
+    private let thinUnderline = NSUnderlineStyle.single.rawValue
+
+    private let thickUnderline = NSUnderlineStyle.thick.rawValue
+
     // 実行中の AI 変換 Task。後続入力で stale 結果を破棄するためにキャンセルする。
     private var conversionTask: Task<Void, Never>?
 
@@ -262,12 +267,54 @@ final class RomaFlowInputController: IMKInputController {
     private func updateMarkedText(_ text: String, client: IMKTextInput) {
         if text.isEmpty {
             clearMarkedText(client)
+
             return
         }
 
-        // カーソルは末尾に置く。length は NSString (UTF-16) 基準で数える。
-        let cursorRange = NSRange(location: (text as NSString).length, length: 0)
-        client.setMarkedText(text, selectionRange: cursorRange, replacementRange: notFoundRange)
+        let marked = buildMarkedText(text)
+        client.setMarkedText(marked.attributed, selectionRange: marked.selectionRange, replacementRange: notFoundRange)
+    }
+
+    // preedit 文字列に engine の display segment 構造を重ね、各 clause へ下線と clause 番号を付けた
+    // NSAttributedString を組む。全体は細い実線下線で覆い、clause 境界は markedClauseSegment 属性で示す。
+    // selectionRange は Task 1 段階では常に末尾キャレット（選択強調は Task 2 で付与）。
+    private func buildMarkedText(_ text: String) -> (attributed: NSAttributedString, selectionRange: NSRange) {
+        let markedString = text as NSString
+        let totalLength = markedString.length
+        let attributed = NSMutableAttributedString(string: text)
+
+        let fullRange = NSRange(location: 0, length: totalLength)
+        attributed.addAttribute(.underlineStyle, value: thinUnderline, range: fullRange)
+
+        applyClauseSegments(to: attributed, totalLength: totalLength)
+
+        let caretRange = NSRange(location: totalLength, length: 0)
+
+        return (attributed, caretRange)
+    }
+
+    // 各 display segment の UTF-16 長を先頭から積み上げ、clause 範囲に markedClauseSegment 番号を付ける。
+    // segment surface の連結は preedit 文字列の先頭部分と一致する（pendingRomaji 末尾だけ clause 外で素の細線下線のまま）。
+    private func applyClauseSegments(to attributed: NSMutableAttributedString, totalLength: Int) {
+        let segmentCount = Int(engine.segmentCount())
+        var location = 0
+
+        for index in 0..<segmentCount {
+            let segmentLength = (engine.segmentText(index: Int32(index)) as NSString).length
+            if segmentLength == 0 {
+                continue
+            }
+
+            let segmentEnd = location + segmentLength
+            if segmentEnd > totalLength {
+                break
+            }
+
+            let clauseRange = NSRange(location: location, length: segmentLength)
+            attributed.addAttribute(.markedClauseSegment, value: NSNumber(value: index), range: clauseRange)
+
+            location = segmentEnd
+        }
     }
 
     private func clearMarkedText(_ client: IMKTextInput) {
