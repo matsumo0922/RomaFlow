@@ -99,7 +99,16 @@ class RomaFlowEngine internal constructor(
 
         pendingConversionRevision = inputRevision
 
-        val request = ConversionRequest(readingInput, "")
+        val prefixEnd = lockedPrefixEnd()
+        val prefixContext = lockedPrefixContext()
+        val tailReading = readingInput.substring(prefixEnd.coerceIn(0, readingInput.length))
+
+        // 全 segment が Locked なら変換対象が無い。applyConversion 側で no-op になる空文字を返す。
+        if (tailReading.isEmpty()) {
+            return ""
+        }
+
+        val request = ConversionRequest(tailReading, prefixContext)
 
         return conversionProvider.convert(request)
     }
@@ -114,7 +123,12 @@ class RomaFlowEngine internal constructor(
             return ""
         }
 
-        draft = draft.copy(segments = buildSegments(result), selection = Selection.None)
+        val prefixSegments = lockedPrefixSegments()
+        val prefixEnd = lockedPrefixEnd()
+        val tailReading = draft.input.readingInput.substring(prefixEnd.coerceIn(0, draft.input.readingInput.length))
+        val tailSegments = buildTailSegments(result, tailReading, prefixEnd)
+
+        draft = draft.copy(segments = prefixSegments + tailSegments, selection = Selection.None)
 
         return preeditText()
     }
@@ -477,21 +491,40 @@ class RomaFlowEngine internal constructor(
         return builder.toString()
     }
 
-    private fun buildSegments(result: String): List<Segment> {
+    // tail（Locked prefix を除いた未確定読み）の変換結果を segment 化する。
+    // [readingForAlignment] は tail の読み、[offset] は readingInput 上での tail 開始位置。
+    // align は tail 内の相対 range を返すので、各 range を +offset して readingInput 全体の絶対座標へ直す。
+    // prefix run が空のときは offset=0・readingForAlignment=全文となり従来の全文変換と同一になる。
+    private fun buildTailSegments(
+        result: String,
+        readingForAlignment: String,
+        offset: Int,
+    ): List<Segment> {
         val tokens = segmenter.segment(result)
         val effectiveTokens = tokens.ifEmpty { listOf(SegmentToken(result, result)) }
-        val aligned = aligner.align(draft.input.readingInput, effectiveTokens)
+        val aligned = aligner.align(readingForAlignment, effectiveTokens)
 
-        return aligned.map(::toConvertedSegment)
+        return aligned.map { toConvertedSegment(it, offset) }
     }
 
-    private fun toConvertedSegment(aligned: AlignedSegment): Segment {
+    private fun toConvertedSegment(aligned: AlignedSegment, offset: Int): Segment {
         return Segment(
             surface = aligned.token.surface,
             reading = aligned.token.reading,
-            range = aligned.range,
+            range = offsetRange(aligned.range, offset),
             status = SegmentStatus.Converted,
             candidates = emptyList(),
+        )
+    }
+
+    private fun offsetRange(range: TextRange, offset: Int): TextRange {
+        if (offset == 0) {
+            return range
+        }
+
+        return range.copy(
+            startInclusive = range.startInclusive + offset,
+            endExclusive = range.endExclusive + offset,
         )
     }
 
@@ -556,6 +589,33 @@ class RomaFlowEngine internal constructor(
         val status = if (index <= lockEnd) SegmentStatus.Locked else segment.status
 
         return segment.copy(surface = surface, status = status)
+    }
+
+    // 先頭から連続する Locked segment（prefix run）。Option A で lock は常に左から育つので 0..k の連続列になる。
+    private fun lockedPrefixSegments(): List<Segment> {
+        return draft.segments.takeWhile { it.status == SegmentStatus.Locked }
+    }
+
+    // prefix run が readingInput 上でカバーする末尾位置。空なら 0、各 range の最大 endExclusive を採る（null は無視）。
+    private fun lockedPrefixEnd(): Int {
+        val prefix = lockedPrefixSegments()
+
+        if (prefix.isEmpty()) {
+            return 0
+        }
+
+        return prefix.maxOfOrNull { it.range?.endExclusive ?: 0 } ?: 0
+    }
+
+    // prefix run の surface 連結。再変換時に provider へ渡す前方文脈になる。
+    private fun lockedPrefixContext(): String {
+        val builder = StringBuilder()
+
+        for (segment in lockedPrefixSegments()) {
+            builder.append(segment.surface)
+        }
+
+        return builder.toString()
     }
 
     // 選択中の文節に対する候補列（自明候補 + LLM 候補）。未選択 / 未変換対象なら空。

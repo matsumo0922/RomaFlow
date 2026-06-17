@@ -609,6 +609,82 @@ class RomaFlowEngineTest {
         // 選択 None では call2 を発火しない。
         assertEquals("", engine.requestWordCandidates())
     }
+
+    @Test
+    fun reconvert_preservesLockedPrefixAndReconvertsOnlyTail() = runTest {
+        val engine = newEngine(RECONVERT_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 0（私）を選択して別候補（渡し）で確定 → 0..0 を prefix lock。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("渡し")
+
+        // 再変換すると Locked prefix（渡し）は保持し、tail（てんき）だけ再変換される。
+        engine.convertAndApply()
+
+        assertEquals("渡し", engine.segmentText(0))
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("天気", engine.segmentText(1))
+        assertEquals("Converted", engine.segmentStatus(1))
+        assertEquals("渡し天気", engine.preeditText())
+    }
+
+    @Test
+    fun reconvert_sendsTailReadingAndLockedPrefixContextToProvider() = runTest {
+        val recording = RecordingConversionProvider()
+        val engine = RomaFlowEngine(recording, RECONVERT_SEGMENTER, FakeAligner())
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 0 を渡しで確定（0..0 Locked）してから 2 回目の変換を発火する。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("渡し")
+        engine.convert()
+
+        val request = requireNotNull(recording.lastRequest)
+        assertEquals("てんき", request.readingInput)
+        assertEquals("渡し", request.prefixContext)
+    }
+
+    @Test
+    fun reconvert_offsetsTailSegmentRangeByPrefixEnd() = runTest {
+        val engine = newEngine(RECONVERT_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("渡し")
+        engine.convertAndApply()
+
+        // tail segment（天気）の読みは元のまま・range は prefixEnd(=3) 分オフセットされる。
+        // exact backspace で tail だけが読み（てんき）へ戻り、prefix（渡し）は保持される。
+        assertEquals("てんき", engine.segmentReading(1))
+        assertEquals("渡してんき", engine.deleteBackward())
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("Unconverted", engine.segmentStatus(1))
+    }
+
+    @Test
+    fun reconvert_isNoOpWhenAllSegmentsLocked() = runTest {
+        val engine = newEngine(RECONVERT_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を確定 → 0..1 全 Locked。
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("天気")
+
+        // tail が空なので convert は何もせず空文字を返し、apply 後も両 segment が Locked のまま。
+        assertEquals("", engine.convert())
+        engine.applyConversion("")
+
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("Locked", engine.segmentStatus(1))
+        assertEquals("私天気", engine.preeditText())
+    }
 }
 
 /** 候補窓の現在候補を index 順に取り出す検証用ヘルパー。 */
@@ -639,6 +715,26 @@ private val WATASHI_TENKI_SEGMENTER = MappedSegmenter(
         "私天気" to listOf(
             SegmentToken("私", "わたし"),
             SegmentToken("天気", "てんき"),
+        ),
+    ),
+)
+
+/**
+ * lock 再変換テスト用 segmenter。初回変換の全文「私天気」と、tail 再変換で返る「天気」の両方を読み付きで分割する。
+ */
+private val RECONVERT_SEGMENTER = MappedSegmenter(
+    mapOf(
+        "私天気" to listOf(
+            SegmentToken("私", "わたし"),
+            SegmentToken("天気", "てんき"),
+        ),
+        "天気" to listOf(
+            SegmentToken("天気", "てんき"),
+        ),
+        // RecordingConversionProvider は変換せず読みを素通しするため、全文「わたしてんき」も分割対象にする。
+        "わたしてんき" to listOf(
+            SegmentToken("わたし", "わたし"),
+            SegmentToken("てんき", "てんき"),
         ),
     ),
 )

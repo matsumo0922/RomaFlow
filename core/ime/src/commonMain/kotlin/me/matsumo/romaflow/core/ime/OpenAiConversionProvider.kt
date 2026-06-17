@@ -47,7 +47,7 @@ internal class OpenAiConversionProvider(
             return ""
         }
 
-        val result = runCatching { requestConversion(kana) }
+        val result = runCatching { requestConversion(kana, request.prefixContext) }
         val converted = result.getOrNull()
 
         if (converted == null) {
@@ -78,12 +78,16 @@ internal class OpenAiConversionProvider(
         return candidatesJson.trim()
     }
 
-    private suspend fun requestConversion(kana: String): String {
+    private suspend fun requestConversion(
+        kana: String,
+        prefixContext: String,
+    ): String {
+        val userContent = buildConversionUserContent(kana, prefixContext)
         val request = ChatCompletionRequest(
             model = config.model,
             messages = listOf(
                 ChatMessage(role = "system", content = SYSTEM_PROMPT),
-                ChatMessage(role = "user", content = kana),
+                ChatMessage(role = "user", content = userContent),
             ),
             reasoningEffort = REASONING_EFFORT,
         )
@@ -123,6 +127,19 @@ internal class OpenAiConversionProvider(
         val completion = response.body<ChatCompletionResponse>()
 
         return completion.choices.firstOrNull()?.message?.content.orEmpty()
+    }
+
+    // lock 再変換では先頭の確定済み文節を前方文脈として渡し、tail の読みだけを変換させる。
+    // prefixContext が空（lock 無しの初回変換）なら従来どおり読みだけを送り、プロンプトを変えない。
+    private fun buildConversionUserContent(
+        kana: String,
+        prefixContext: String,
+    ): String {
+        if (prefixContext.isBlank()) {
+            return kana
+        }
+
+        return "前方文脈: $prefixContext\n続きの読み: $kana"
     }
 
     private fun buildCandidateUserContent(
