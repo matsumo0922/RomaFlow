@@ -150,6 +150,36 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun convert_sendsEmptyPrefixContextAndFullReadingWhenNoLock() = runTest {
+        val recording = RecordingConversionProvider()
+        val engine = RomaFlowEngine(recording, FakeSegmenter(), FakeAligner())
+        engine.inputRomaji("nihongo")
+
+        engine.convert()
+
+        val request = requireNotNull(recording.lastRequest)
+        assertEquals("にほんご", request.readingInput)
+        assertEquals("", request.prefixContext)
+    }
+
+    @Test
+    fun fakeProvider_candidatesAreDeterministicForKnownReading() = runTest {
+        val provider = FakeConversionProvider()
+
+        val candidatesJson = provider.candidates(WordCandidateRequest(reading = "てんき", context = ""))
+
+        assertEquals("""{"candidates":["天気","転機","てんき","テンキ"]}""", candidatesJson)
+    }
+
+    @Test
+    fun fakeProvider_candidatesAreEmptyForUnknownReading() = runTest {
+        val provider = FakeConversionProvider()
+
+        assertEquals("", provider.candidates(WordCandidateRequest(reading = "ぬるぽ", context = "")))
+        assertEquals("", provider.candidates(WordCandidateRequest(reading = "  ", context = "")))
+    }
+
+    @Test
     fun applyConversion_ignoresEmptyResultAndStaysUnconverted() {
         val engine = newEngine()
         engine.inputRomaji("nihongo")
@@ -392,6 +422,23 @@ private suspend fun RomaFlowEngine.convertAndApply(): String {
     val result = convert()
 
     return applyConversion(result)
+}
+
+/** convert() に渡された最後の [ConversionRequest] を記録し、変換結果は素通しで返すテスト用 provider。 */
+private class RecordingConversionProvider : ConversionProvider {
+
+    var lastRequest: ConversionRequest? = null
+        private set
+
+    override suspend fun convert(request: ConversionRequest): String {
+        lastRequest = request
+
+        return request.readingInput
+    }
+
+    override suspend fun candidates(request: WordCandidateRequest): String {
+        return ""
+    }
 }
 
 /** 既知の変換結果を読み付き token 列へ分割し、未登録の入力は 1 文字 1 token にフォールバックする segmenter。 */

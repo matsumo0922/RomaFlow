@@ -88,7 +88,7 @@ class RomaFlowEngine internal constructor(
 
         pendingConversionRevision = inputRevision
 
-        val request = ConversionRequest(readingInput, emptyList())
+        val request = ConversionRequest(readingInput, "")
 
         return conversionProvider.convert(request)
     }
