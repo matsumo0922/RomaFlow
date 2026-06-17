@@ -371,22 +371,25 @@ class RomaFlowEngine internal constructor(
             return
         }
 
-        val nextIndex = nextSelectionIndex(forward, count)
-
-        draft = draft.copy(selection = Selection.Word(nextIndex))
+        draft = draft.copy(selection = nextSelection(forward, count))
     }
 
-    private fun nextSelectionIndex(forward: Boolean, count: Int): Int {
+    // 入力直後のカーソルは末尾にあるため ← で末尾 clause から文節選択へ入り、→ は右に clause が無いので据え置く。
+    // 選択中は ← で左の clause（先頭で停止）、→ で右の clause へ進み、末尾を越えたら選択解除してカーソルを末尾へ戻す。
+    private fun nextSelection(forward: Boolean, count: Int): Selection {
         val current = selectedSegmentIndex()
 
-        // 未選択からは → で先頭、← で末尾へ。選択中は範囲内で 1 つずつ動かす。
         if (current < 0) {
-            return if (forward) 0 else count - 1
+            return if (forward) Selection.None else Selection.Word(count - 1)
         }
 
-        val candidate = if (forward) current + 1 else current - 1
+        if (!forward) {
+            return Selection.Word((current - 1).coerceAtLeast(0))
+        }
 
-        return candidate.coerceIn(0, count - 1)
+        val next = current + 1
+
+        return if (next > count - 1) Selection.None else Selection.Word(next)
     }
 
     private fun clampSelection(selection: Selection, displayCount: Int): Selection {
