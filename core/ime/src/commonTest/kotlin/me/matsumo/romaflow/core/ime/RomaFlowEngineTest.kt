@@ -515,6 +515,111 @@ class RomaFlowEngineTest {
         // Candidate 中も B1c ハイライト継続のため selectedSegmentIndex は選択 index を返す。
         assertEquals(1, engine.selectedSegmentIndex())
     }
+
+    @Test
+    fun requestAndApplyWordCandidates_mergesLlmCandidatesWithObvious() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気 / 読み てんき）を選択して call2 を発火・適用する。
+        engine.moveSelectionLeft()
+        val raw = engine.requestWordCandidates()
+        engine.applyWordCandidates(raw)
+
+        // 自明 [天気, てんき, テンキ] + LLM [天気, 転機, てんき, テンキ] の重複除外後は 4 件。
+        assertEquals(4, engine.candidateCount())
+        assertTrue(candidateList(engine).contains("転機"))
+    }
+
+    @Test
+    fun applyWordCandidates_normalizesControlCharsAndDropsBlanks() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+
+        // stale でない状態（request 経由で id を揃える）で正規化対象の生 JSON を適用する。
+        engine.requestWordCandidates()
+        engine.applyWordCandidates("""{"candidates":["転\n機","","気\t団","転機"]}""")
+
+        val candidates = candidateList(engine)
+
+        // 制御文字（改行・tab）除去後の候補が入り、空候補は除外、重複「転機」は 1 件に畳まれる。
+        assertTrue(candidates.contains("転機"))
+        assertTrue(candidates.contains("気団"))
+        assertFalse(candidates.contains(""))
+        assertEquals(1, candidates.count { it == "転機" })
+    }
+
+    @Test
+    fun applyWordCandidates_isNoOpWhenSessionClosedAfterRequest() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        val raw = engine.requestWordCandidates()
+
+        // 窓を閉じた後に古い結果が返っても LLM 候補を復活させない（stale guard）。
+        engine.closeCandidates()
+        val countAfterClose = engine.candidateCount()
+        engine.applyWordCandidates(raw)
+
+        assertEquals(countAfterClose, engine.candidateCount())
+        assertFalse(candidateList(engine).contains("転機"))
+    }
+
+    @Test
+    fun applyWordCandidates_isNoOpAfterConfirm() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        val raw = engine.requestWordCandidates()
+
+        // confirm 後に古い結果が返っても確定後の状態を書き換えない（stale guard）。
+        engine.confirmCandidate("転機")
+        engine.applyWordCandidates(raw)
+
+        assertEquals("転機", engine.segmentText(1))
+        assertEquals("Locked", engine.segmentStatus(1))
+    }
+
+    @Test
+    fun applyWordCandidates_isNoOpAfterSelectionMoved() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        val raw = engine.requestWordCandidates()
+
+        // 選択が動いたら古い結果は別 segment に乗らず破棄される（stale guard）。
+        engine.moveSelectionLeft()
+        engine.applyWordCandidates(raw)
+
+        assertFalse(candidateList(engine).contains("転機"))
+    }
+
+    @Test
+    fun requestWordCandidates_returnsEmptyWhenNoSegmentSelected() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // 選択 None では call2 を発火しない。
+        assertEquals("", engine.requestWordCandidates())
+    }
+}
+
+/** 候補窓の現在候補を index 順に取り出す検証用ヘルパー。 */
+private fun candidateList(engine: RomaFlowEngine): List<String> {
+    val candidates = mutableListOf<String>()
+
+    for (index in 0 until engine.candidateCount()) {
+        candidates.add(engine.candidateText(index))
+    }
+
+    return candidates
 }
 
 /** preedit 不変条件の検証用に、engine の全 segment surface を連結する。 */

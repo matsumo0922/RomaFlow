@@ -1,5 +1,7 @@
 package me.matsumo.romaflow.core.ime
 
+import kotlinx.serialization.json.Json
+
 /**
  * RomaFlow IME core の変換 draft を保持するエンジン。
  *
@@ -30,6 +32,13 @@ class RomaFlowEngine internal constructor(
 
     // 実行中の変換要求が発行されたときの入力リビジョン。結果適用時にこれが現在値と一致するか確認する。
     private var pendingConversionRevision = -1
+
+    // 候補窓セッションのリビジョン。inputRevision とは独立に call2 の stale を判定する。
+    // 選択変更・入力変更・session 終了操作で増やす（previewCandidate の窓内ナビでは増やさない）。
+    private var candidateRequestId = 0
+
+    // 実行中の call2 要求が発行されたときの candidateRequestId。結果適用時にこれが現在値と一致するか確認する。
+    private var pendingCandidateRequestId = -1
 
     /** Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner を使う constructor。 */
     constructor() : this(defaultConversionProvider(), MomijiSegmenter(), DpReadingAligner())
@@ -85,6 +94,8 @@ class RomaFlowEngine internal constructor(
         if (readingInput.isEmpty()) {
             return ""
         }
+
+        invalidateCandidateSession()
 
         pendingConversionRevision = inputRevision
 
@@ -213,6 +224,8 @@ class RomaFlowEngine internal constructor(
      * 壊さず途中の文節だけ差し替えられるようにする。
      */
     fun confirmCandidate(text: String): String {
+        invalidateCandidateSession()
+
         val segmentIndex = selectedSegmentIndexOrNull()
         val isInRange = segmentIndex != null && segmentIndex in draft.segments.indices
 
@@ -233,11 +246,67 @@ class RomaFlowEngine internal constructor(
      * [Selection.Candidate] 中のみ Word に戻す（surface は projection で元へ戻る）。それ以外は据え置く。
      */
     fun closeCandidates(): String {
+        invalidateCandidateSession()
+
         val selection = draft.selection
 
         if (selection is Selection.Candidate) {
             draft = draft.copy(selection = Selection.Word(selection.segmentIndex))
         }
+
+        return preeditText()
+    }
+
+    /**
+     * 選択中の文節について call2（LLM 単語候補）を provider へ要求し、生の JSON 文字列を返す。
+     *
+     * 選択が draft.segments の範囲内（変換済 / lock 済の実 segment）でなければ no-op で空文字を返す。
+     * 発行時の [candidateRequestId] を [pendingCandidateRequestId] に記録し、結果適用時の stale 判定に使う。
+     * パース・正規化・自明候補とのマージは [applyWordCandidates] が担うため、ここでは生の戻り値をそのまま返す。
+     * provider は失敗時に空文字を返す契約なので、追加の try/catch は行わない。
+     */
+    suspend fun requestWordCandidates(): String {
+        val segmentIndex = selectedSegmentIndexOrNull()
+        val isInRange = segmentIndex != null && segmentIndex in draft.segments.indices
+
+        if (!isInRange) {
+            return ""
+        }
+
+        pendingCandidateRequestId = candidateRequestId
+
+        val segment = draft.segments[requireNotNull(segmentIndex)]
+        val request = WordCandidateRequest(segment.reading, convertedContext())
+
+        return conversionProvider.candidates(request)
+    }
+
+    /**
+     * call2 の生 JSON [result] をパース・正規化し、選択中の文節の候補 [Segment.candidates] へ格納して preedit を返す。
+     *
+     * 発行時から [candidateRequestId] が変わっていれば（窓を閉じた・別 segment へ移った・入力が変わった等）
+     * stale として no-op。選択が範囲外・[result] が空・パース失敗の場合も no-op で現在の preedit を返す。
+     * 格納する候補は制御文字を除去し trim・空除外・重複除外した上で、[candidateCount] / [candidateText] が
+     * 自明候補とマージして表示する。
+     */
+    fun applyWordCandidates(result: String): String {
+        val isStale = candidateRequestId != pendingCandidateRequestId
+
+        if (isStale) {
+            return preeditText()
+        }
+
+        val segmentIndex = selectedSegmentIndexOrNull()
+        val isInRange = segmentIndex != null && segmentIndex in draft.segments.indices
+
+        if (!isInRange || result.isEmpty()) {
+            return preeditText()
+        }
+
+        val parsed = parseCandidates(result) ?: return preeditText()
+        val normalized = normalizeCandidates(parsed)
+
+        storeCandidates(requireNotNull(segmentIndex), normalized)
 
         return preeditText()
     }
@@ -427,6 +496,8 @@ class RomaFlowEngine internal constructor(
     }
 
     private fun moveSelection(forward: Boolean) {
+        invalidateCandidateSession()
+
         val count = displayProjection().size
 
         if (count == 0) {
@@ -499,6 +570,45 @@ class RomaFlowEngine internal constructor(
         val merged = obviousCandidates(segment) + segment.candidates
 
         return merged.filter { it.isNotEmpty() }.distinct()
+    }
+
+    // call2 の文脈に渡す変換済み全文。preview は反映せず draft.segments の実 surface を連結する。
+    private fun convertedContext(): String {
+        val builder = StringBuilder()
+
+        for (segment in draft.segments) {
+            builder.append(segment.surface)
+        }
+
+        return builder.toString()
+    }
+
+    // 生 JSON から候補列を取り出す。空・パース失敗は null（呼び出し側で据え置き）。throw しない。
+    private fun parseCandidates(result: String): List<String>? {
+        val parsed = runCatching { candidateJson.decodeFromString<WordCandidatePayload>(result) }
+
+        return parsed.getOrNull()?.candidates
+    }
+
+    // 制御文字（CR/LF/tab 等）を除去 → trim → 空除外 → 重複除外する。
+    private fun normalizeCandidates(candidates: List<String>): List<String> {
+        return candidates.map(::stripControlChars)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+    }
+
+    private fun stripControlChars(candidate: String): String {
+        return candidate.filterNot { it.isISOControl() }
+    }
+
+    // 正規化済み LLM 候補を選択 segment の candidates へ格納する（自明候補とのマージは currentCandidates が担う）。
+    private fun storeCandidates(segmentIndex: Int, candidates: List<String>) {
+        val updated = draft.segments.toMutableList()
+
+        updated[segmentIndex] = updated[segmentIndex].copy(candidates = candidates)
+
+        draft = draft.copy(segments = updated)
     }
 
     // 元文節から決定的に作る自明候補: surface（漢字等） / reading（ひらがな） / reading のカタカナ化。重複・空は後段で除外。
@@ -608,6 +718,13 @@ class RomaFlowEngine internal constructor(
 
     private fun markInputChanged() {
         inputRevision++
+
+        invalidateCandidateSession()
+    }
+
+    // 候補窓セッションを無効化し、進行中の call2 結果を stale として破棄させる（Finding B）。
+    private fun invalidateCandidateSession() {
+        candidateRequestId++
     }
 
     private fun clearState() {
@@ -615,6 +732,9 @@ class RomaFlowEngine internal constructor(
     }
 
     private companion object {
+        /** call2 の生 JSON を寛容にパースする Json。未知キーは無視する。 */
+        val candidateJson = Json { ignoreUnknownKeys = true }
+
         /** per-segment revert を許可する confidence の下限（完全一致）。 */
         const val EXACT_MATCH_CONFIDENCE = 1f
 

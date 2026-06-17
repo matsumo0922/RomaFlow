@@ -1,7 +1,5 @@
 package me.matsumo.romaflow.core.ime
 
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
@@ -62,14 +60,3 @@ internal class FakeConversionProvider : ConversionProvider {
         )
     }
 }
-
-/**
- * call2 の出力 JSON `{"candidates":[...]}` に対応する payload。
- *
- * [FakeConversionProvider] が決定的に生成する候補列を [kotlinx.serialization] でシリアライズするために使う。
- */
-@Serializable
-private data class WordCandidatePayload(
-    @SerialName("candidates")
-    val candidates: List<String>,
-)
