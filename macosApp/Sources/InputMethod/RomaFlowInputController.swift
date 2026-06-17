@@ -20,6 +20,11 @@ final class RomaFlowInputController: IMKInputController {
     // insertText / setMarkedText で「置換範囲を指定しない」ことを示す range
     private let notFoundRange = NSRange(location: NSNotFound, length: 0)
 
+    // marked text の下線スタイル。未選択 clause は細い実線、選択中 clause は太い実線。
+    private let thinUnderline = NSUnderlineStyle.single.rawValue
+
+    private let thickUnderline = NSUnderlineStyle.thick.rawValue
+
     // 実行中の AI 変換 Task。後続入力で stale 結果を破棄するためにキャンセルする。
     private var conversionTask: Task<Void, Never>?
 
@@ -262,12 +267,64 @@ final class RomaFlowInputController: IMKInputController {
     private func updateMarkedText(_ text: String, client: IMKTextInput) {
         if text.isEmpty {
             clearMarkedText(client)
+
             return
         }
 
-        // カーソルは末尾に置く。length は NSString (UTF-16) 基準で数える。
-        let cursorRange = NSRange(location: (text as NSString).length, length: 0)
-        client.setMarkedText(text, selectionRange: cursorRange, replacementRange: notFoundRange)
+        let marked = buildMarkedText(text)
+        client.setMarkedText(marked.attributed, selectionRange: marked.selectionRange, replacementRange: notFoundRange)
+    }
+
+    // preedit 文字列に engine の display segment 構造を重ね、各 clause へ下線と clause 番号を付けた
+    // NSAttributedString を組む。全体は細い実線下線で覆い、clause 境界は markedClauseSegment 属性で示す。
+    // 選択中 clause があればその範囲へ、なければ末尾へキャレットを置く。
+    private func buildMarkedText(_ text: String) -> (attributed: NSAttributedString, selectionRange: NSRange) {
+        let markedString = text as NSString
+        let totalLength = markedString.length
+        let attributed = NSMutableAttributedString(string: text)
+
+        let fullRange = NSRange(location: 0, length: totalLength)
+        attributed.addAttribute(.underlineStyle, value: thinUnderline, range: fullRange)
+
+        let selectedRange = applyClauseSegments(to: attributed, totalLength: totalLength)
+        let caretRange = selectedRange ?? NSRange(location: totalLength, length: 0)
+
+        return (attributed, caretRange)
+    }
+
+    // 各 display segment の UTF-16 長を先頭から積み上げ、clause 範囲に markedClauseSegment 番号を付ける。
+    // 選択中 clause（selectedSegmentIndex）には太線下線とシステム選択背景色を付け、その範囲を戻り値で返す。
+    // 未選択（-1）や範囲外なら nil を返す。
+    private func applyClauseSegments(to attributed: NSMutableAttributedString, totalLength: Int) -> NSRange? {
+        let segmentCount = Int(engine.segmentCount())
+        let selectedIndex = Int(engine.selectedSegmentIndex())
+        var location = 0
+        var selectedRange: NSRange?
+
+        for index in 0..<segmentCount {
+            let segmentLength = (engine.segmentText(index: Int32(index)) as NSString).length
+            if segmentLength == 0 {
+                continue
+            }
+
+            let segmentEnd = location + segmentLength
+            if segmentEnd > totalLength {
+                break
+            }
+
+            let clauseRange = NSRange(location: location, length: segmentLength)
+            attributed.addAttribute(.markedClauseSegment, value: NSNumber(value: index), range: clauseRange)
+
+            if index == selectedIndex {
+                attributed.addAttribute(.underlineStyle, value: thickUnderline, range: clauseRange)
+                attributed.addAttribute(.backgroundColor, value: NSColor.selectedTextBackgroundColor, range: clauseRange)
+                selectedRange = clauseRange
+            }
+
+            location = segmentEnd
+        }
+
+        return selectedRange
     }
 
     private func clearMarkedText(_ client: IMKTextInput) {

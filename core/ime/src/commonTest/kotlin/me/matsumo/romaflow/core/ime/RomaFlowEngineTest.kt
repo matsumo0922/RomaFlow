@@ -242,8 +242,9 @@ class RomaFlowEngineTest {
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
 
-        // 先頭 segment（私）を選択し backspace → その segment だけ中間かなへ戻す（優先順位 2）。
-        engine.moveSelectionRight()
+        // 先頭 segment（私）を ← 2 回で選択し backspace → その segment だけ中間かなへ戻す（優先順位 2）。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
 
         assertEquals("わたし天気", engine.deleteBackward())
         assertEquals("Unconverted", engine.segmentStatus(0))
@@ -255,7 +256,8 @@ class RomaFlowEngineTest {
         val engine = newEngine(WATASHI_TENKI_SEGMENTER)
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
-        engine.moveSelectionRight()
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
         engine.deleteBackward()
 
         // 中間かな（わたし）を選択したまま backspace → その segment 末尾の 1 かなだけ削る（優先順位 3）。
@@ -271,8 +273,8 @@ class RomaFlowEngineTest {
         engine.inputRomaji("nihongo")
         engine.convertAndApply()
 
-        // 完全一致しない（FakeSegmenter）変換済 segment を選択して backspace → 全体 revert。
-        engine.moveSelectionRight()
+        // 完全一致しない（FakeSegmenter）変換済 segment を ← で選択して backspace → 全体 revert。
+        engine.moveSelectionLeft()
 
         assertEquals("にほんご", engine.deleteBackward())
         assertFalse(engine.isConverted())
@@ -284,9 +286,10 @@ class RomaFlowEngineTest {
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
 
-        // 全 exact segment を per-segment revert し、変換済が 1 つも残らない状態を作る。
+        // 末尾 segment（天気）と先頭 segment（私）を ← で順に選択し per-segment revert して、変換済を 1 つも残さない。
+        engine.moveSelectionLeft()
         engine.deleteBackward()
-        engine.moveSelectionRight()
+        engine.moveSelectionLeft()
         engine.deleteBackward()
 
         assertFalse(engine.isConverted())
@@ -320,18 +323,29 @@ class RomaFlowEngineTest {
 
         assertEquals(-1, engine.selectedSegmentIndex())
 
-        // 変換直後の未選択から → で先頭。
+        // 未選択（カーソル末尾）からの → は右に clause が無いので据え置く。
         engine.moveSelectionRight()
-        assertEquals(0, engine.selectedSegmentIndex())
+        assertEquals(-1, engine.selectedSegmentIndex())
 
-        // 左端を超えてもクランプ。
+        // ← で末尾 clause から文節選択へ入る。
         engine.moveSelectionLeft()
-        engine.moveSelectionLeft()
-        assertEquals(0, engine.selectedSegmentIndex())
-
-        // 右端を超えてもクランプ。
-        repeat(5) { engine.moveSelectionRight() }
         assertEquals(2, engine.selectedSegmentIndex())
+
+        // ← は先頭でクランプ。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        assertEquals(0, engine.selectedSegmentIndex())
+
+        // → で右の clause へ 1 つずつ進む。
+        engine.moveSelectionRight()
+        assertEquals(1, engine.selectedSegmentIndex())
+
+        // 末尾 clause を → で越えると選択解除しカーソルを末尾へ戻す。
+        engine.moveSelectionRight()
+        assertEquals(2, engine.selectedSegmentIndex())
+        engine.moveSelectionRight()
+        assertEquals(-1, engine.selectedSegmentIndex())
     }
 
     @Test
@@ -343,6 +357,18 @@ class RomaFlowEngineTest {
         engine.moveSelectionLeft()
 
         assertEquals(2, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun moveSelectionRight_fromUnselectedDoesNotEnterSelection() = runTest {
+        val engine = newEngine()
+        engine.inputRomaji("nihongo")
+        engine.convertAndApply()
+
+        // 入力直後はカーソルが末尾にあり右に clause が無いため、→ では文節選択へ入らない。
+        engine.moveSelectionRight()
+
+        assertEquals(-1, engine.selectedSegmentIndex())
     }
 }
 
