@@ -279,6 +279,24 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun cancel_clearsInOneStepWhenAllSegmentsReverted() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // 全 exact segment を per-segment revert し、変換済が 1 つも残らない状態を作る。
+        engine.deleteBackward()
+        engine.moveSelectionRight()
+        engine.deleteBackward()
+
+        assertFalse(engine.isConverted())
+
+        // 変換済が無いので Esc は 1 回で composition 全体を破棄する（空振りしない）。
+        assertEquals("", engine.cancel())
+        assertFalse(engine.hasComposition())
+    }
+
+    @Test
     fun cancel_revertsConversionThenClears() = runTest {
         val engine = newEngine()
         engine.inputRomaji("toukyou")

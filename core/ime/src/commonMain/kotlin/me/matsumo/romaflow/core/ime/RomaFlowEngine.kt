@@ -120,8 +120,9 @@ class RomaFlowEngine internal constructor(
     fun cancel(): String {
         markInputChanged()
 
-        // 変換済なら segments だけ破棄して打った通りのかな（readingInput）へ戻す。未変換なら全体を破棄する。
-        if (draft.segments.isNotEmpty()) {
+        // 変換済 segment が残るなら segments だけ破棄して打った通りのかな（readingInput）へ戻す。
+        // per-segment revert で全て未変換かなに戻った場合は変換済が無いので、一度の Esc で全体を破棄する。
+        if (isConverted()) {
             revertConversion()
 
             return preeditText()
