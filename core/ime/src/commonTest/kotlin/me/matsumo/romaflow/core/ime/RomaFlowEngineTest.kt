@@ -7,11 +7,12 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * [RomaFlowEngine] の変換 draft（増分入力・全文変換・混在 preedit・単語選択・backspace）の振る舞いを検証するテスト。
+ * [RomaFlowEngine] の変換 draft（増分入力・全文変換・混在 preedit・単語選択・per-segment revert・backspace）の
+ * 振る舞いを検証するテスト。
  *
  * テストは macosArm64 上で実行する。Android ターゲットは host unit test を有効化していないため
  * 本テストは実行されず、依存がコンパイル時に解決されることのみ確認する。
- * 変換系は決定的な [FakeConversionProvider]、分割は 1 文字 1 token の [FakeSegmenter] を注入する。
+ * 変換系は決定的な [FakeConversionProvider]、分割は注入する [Segmenter]、対応付けは [FakeAligner] を使う。
  */
 class RomaFlowEngineTest {
 
@@ -204,20 +205,77 @@ class RomaFlowEngineTest {
         assertEquals(3, engine.segmentCount())
         assertEquals("Unconverted", engine.segmentStatus(2))
 
-        // 末尾の未変換かなを 1 つ削ると変換済 preedit に戻る（優先順位 4）。
+        // 末尾の未変換かなを 1 つ削ると変換済 preedit に戻る（tail の末尾 1 かな削除）。
         assertEquals("漢字", engine.deleteBackward())
     }
 
     @Test
-    fun deleteBackward_revertsConversionToReadingInput() = runTest {
+    fun deleteBackward_onNonExactLastSegmentFallsBackToWholeRevert() = runTest {
         val engine = newEngine()
         engine.inputRomaji("kanji")
         engine.convertAndApply()
 
-        // 変換済領域末尾での backspace は、その変換を打った通りのかなへ戻す（優先順位 4 / range 無しの B1a）。
+        // FakeSegmenter の読みは表層形（漢字）なので readingInput と完全一致せず、末尾 segment の
+        // backspace は per-segment ではなく全体 revert にフォールバックする（confidence 低）。
         assertEquals("かんじ", engine.deleteBackward())
         assertFalse(engine.isConverted())
         assertTrue(engine.hasComposition())
+    }
+
+    @Test
+    fun deleteBackward_revertsOnlyLastSegmentWhenExact() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // 読みが完全一致する変換済末尾 segment（天気）だけを打った通りのかなへ戻す（優先順位 4 / range revert）。
+        assertEquals("私てんき", engine.deleteBackward())
+        assertEquals(2, engine.segmentCount())
+        assertEquals("Converted", engine.segmentStatus(0))
+        assertEquals("Unconverted", engine.segmentStatus(1))
+        assertTrue(engine.isConverted())
+    }
+
+    @Test
+    fun deleteBackward_onSelectedConvertedSegmentRevertsThatSegment() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // 先頭 segment（私）を選択し backspace → その segment だけ中間かなへ戻す（優先順位 2）。
+        engine.moveSelectionRight()
+
+        assertEquals("わたし天気", engine.deleteBackward())
+        assertEquals("Unconverted", engine.segmentStatus(0))
+        assertEquals("Converted", engine.segmentStatus(1))
+    }
+
+    @Test
+    fun deleteBackward_onSelectedUnconvertedSegmentDeletesTrailingKana() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionRight()
+        engine.deleteBackward()
+
+        // 中間かな（わたし）を選択したまま backspace → その segment 末尾の 1 かなだけ削る（優先順位 3）。
+        assertEquals("わた天気", engine.deleteBackward())
+        assertEquals(0, engine.selectedSegmentIndex())
+        assertEquals("Unconverted", engine.segmentStatus(0))
+        assertEquals("Converted", engine.segmentStatus(1))
+    }
+
+    @Test
+    fun deleteBackward_onSelectedNonExactSegmentFallsBackToWholeRevert() = runTest {
+        val engine = newEngine()
+        engine.inputRomaji("nihongo")
+        engine.convertAndApply()
+
+        // 完全一致しない（FakeSegmenter）変換済 segment を選択して backspace → 全体 revert。
+        engine.moveSelectionRight()
+
+        assertEquals("にほんご", engine.deleteBackward())
+        assertFalse(engine.isConverted())
     }
 
     @Test
@@ -270,9 +328,19 @@ class RomaFlowEngineTest {
     }
 }
 
-/** FakeConversionProvider + FakeSegmenter を注入したテスト用 [RomaFlowEngine]。 */
-private fun newEngine(): RomaFlowEngine {
-    return RomaFlowEngine(FakeConversionProvider(), FakeSegmenter())
+/** 「私天気」を読み付きの 2 token（私=わたし / 天気=てんき）へ分割するテスト用 segmenter。 */
+private val WATASHI_TENKI_SEGMENTER = MappedSegmenter(
+    mapOf(
+        "私天気" to listOf(
+            SegmentToken("私", "わたし"),
+            SegmentToken("天気", "てんき"),
+        ),
+    ),
+)
+
+/** FakeConversionProvider + 指定 [segmenter] + FakeAligner を注入したテスト用 [RomaFlowEngine]。 */
+private fun newEngine(segmenter: Segmenter = FakeSegmenter()): RomaFlowEngine {
+    return RomaFlowEngine(FakeConversionProvider(), segmenter, FakeAligner())
 }
 
 /** convert() の結果を applyConversion() で反映するテスト用ヘルパー。 */
@@ -280,4 +348,12 @@ private suspend fun RomaFlowEngine.convertAndApply(): String {
     val result = convert()
 
     return applyConversion(result)
+}
+
+/** 既知の変換結果を読み付き token 列へ分割し、未登録の入力は 1 文字 1 token にフォールバックする segmenter。 */
+private class MappedSegmenter(private val table: Map<String, List<SegmentToken>>) : Segmenter {
+
+    override fun segment(text: String): List<SegmentToken> {
+        return table[text] ?: text.map { SegmentToken(it.toString(), it.toString()) }
+    }
 }
