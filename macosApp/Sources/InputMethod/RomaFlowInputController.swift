@@ -277,7 +277,7 @@ final class RomaFlowInputController: IMKInputController {
 
     // preedit 文字列に engine の display segment 構造を重ね、各 clause へ下線と clause 番号を付けた
     // NSAttributedString を組む。全体は細い実線下線で覆い、clause 境界は markedClauseSegment 属性で示す。
-    // selectionRange は Task 1 段階では常に末尾キャレット（選択強調は Task 2 で付与）。
+    // 選択中 clause があればその範囲へ、なければ末尾へキャレットを置く。
     private func buildMarkedText(_ text: String) -> (attributed: NSAttributedString, selectionRange: NSRange) {
         let markedString = text as NSString
         let totalLength = markedString.length
@@ -286,18 +286,20 @@ final class RomaFlowInputController: IMKInputController {
         let fullRange = NSRange(location: 0, length: totalLength)
         attributed.addAttribute(.underlineStyle, value: thinUnderline, range: fullRange)
 
-        applyClauseSegments(to: attributed, totalLength: totalLength)
-
-        let caretRange = NSRange(location: totalLength, length: 0)
+        let selectedRange = applyClauseSegments(to: attributed, totalLength: totalLength)
+        let caretRange = selectedRange ?? NSRange(location: totalLength, length: 0)
 
         return (attributed, caretRange)
     }
 
     // 各 display segment の UTF-16 長を先頭から積み上げ、clause 範囲に markedClauseSegment 番号を付ける。
-    // segment surface の連結は preedit 文字列の先頭部分と一致する（pendingRomaji 末尾だけ clause 外で素の細線下線のまま）。
-    private func applyClauseSegments(to attributed: NSMutableAttributedString, totalLength: Int) {
+    // 選択中 clause（selectedSegmentIndex）には太線下線とシステム選択背景色を付け、その範囲を戻り値で返す。
+    // 未選択（-1）や範囲外なら nil を返す。
+    private func applyClauseSegments(to attributed: NSMutableAttributedString, totalLength: Int) -> NSRange? {
         let segmentCount = Int(engine.segmentCount())
+        let selectedIndex = Int(engine.selectedSegmentIndex())
         var location = 0
+        var selectedRange: NSRange?
 
         for index in 0..<segmentCount {
             let segmentLength = (engine.segmentText(index: Int32(index)) as NSString).length
@@ -313,8 +315,16 @@ final class RomaFlowInputController: IMKInputController {
             let clauseRange = NSRange(location: location, length: segmentLength)
             attributed.addAttribute(.markedClauseSegment, value: NSNumber(value: index), range: clauseRange)
 
+            if index == selectedIndex {
+                attributed.addAttribute(.underlineStyle, value: thickUnderline, range: clauseRange)
+                attributed.addAttribute(.backgroundColor, value: NSColor.selectedTextBackgroundColor, range: clauseRange)
+                selectedRange = clauseRange
+            }
+
             location = segmentEnd
         }
+
+        return selectedRange
     }
 
     private func clearMarkedText(_ client: IMKTextInput) {
