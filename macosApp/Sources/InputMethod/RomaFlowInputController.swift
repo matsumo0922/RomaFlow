@@ -253,12 +253,18 @@ final class RomaFlowInputController: IMKInputController {
         return true
     }
 
-    // 現在の文節選択に候補窓の表示状態を合わせる。選択中なら開く/別文節へ移ったので reload、未選択なら閉じる。
+    // 現在の文節選択に候補窓の表示状態を合わせる。候補のある文節を選択中なら開く/reload、それ以外は閉じる。
     // call2 は文節が変わるたびに旧 Task を cancel して新規発火する (engine 側の stale guard と二重で守る)。
+    // 文節ハイライト (marked text) は呼び出し元の moveSelection 側で更新済みなので、ここは窓だけ管理する。
     private func syncCandidateWindowToSelection(client: IMKTextInput) {
         let hasSelectedClause = engine.selectedSegmentIndex() >= 0
 
-        guard hasSelectedClause else {
+        // 未変換 tail 文節など候補が無い文節 (candidateCount == 0) では空の候補窓を出さない。
+        // candidates(_:) override も [] を返すので、show 経路でも同じ条件で揃える。
+        let hasCandidates = engine.candidateCount() > 0
+        let shouldShowWindow = hasSelectedClause && hasCandidates
+
+        guard shouldShowWindow else {
             hideCandidateWindow()
             cancelPendingCandidates()
 
