@@ -324,9 +324,15 @@ final class RomaFlowInputController: IMKInputController {
         case keyCodeArrowLeft:
             if hasCommandLikeModifier(event) { break }
 
+            // 隣の文節へ移る前に preview session を明示破棄する (Esc/Tab 経路と一貫させる)。
+            // moveSelection も内部で session を invalidate するため二重 invalidate だが挙動は変わらない。
+            _ = engine.closeCandidates()
+
             return handleMoveSelection(toRight: false, client: client)
         case keyCodeArrowRight:
             if hasCommandLikeModifier(event) { break }
+
+            _ = engine.closeCandidates()
 
             return handleMoveSelection(toRight: true, client: client)
         case keyCodeTab:
