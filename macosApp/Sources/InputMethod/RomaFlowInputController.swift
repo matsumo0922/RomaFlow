@@ -55,10 +55,14 @@ final class RomaFlowInputController: IMKInputController {
             break
         }
 
-        // Cmd / Ctrl / Option を伴うキーはショートカット等なので IME では処理しない
+        // Cmd / Ctrl / Option を伴うキーはアプリ側 shortcut なので IME では処理しない。
+        // ただし active composition があるときは marked text と engine state を残さないよう、
+        // WYSIWYG で確定してから pass-through する (issue #8)。
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let hasCommandLikeModifier = !modifiers.intersection([.command, .control, .option]).isEmpty
         if hasCommandLikeModifier {
+            _ = performCommit(with: client)
+
             return false
         }
 
@@ -133,6 +137,11 @@ final class RomaFlowInputController: IMKInputController {
         guard engine.hasComposition() else {
             return false
         }
+
+        // 変換開始時点で pendingRomaji を finalize し、await 中のかな marked を確定後のかな (おn→おん) へ揃える。
+        // これで API key 未設定・空結果・キャンセルでも、表示中の marked text と commit 内容が一致する。
+        let finalizedPreedit = engine.finalizePendingRomaji()
+        updateMarkedText(finalizedPreedit, client: client)
 
         // 変換結果は非同期で届く。後続入力で破棄できるよう Task を保持する。
         conversionTask = Task { @MainActor [weak self] in
