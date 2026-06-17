@@ -12,6 +12,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -60,6 +61,7 @@ internal class OpenAiConversionProvider(
                 ChatMessage(role = "system", content = SYSTEM_PROMPT),
                 ChatMessage(role = "user", content = kana),
             ),
+            reasoningEffort = REASONING_EFFORT,
         )
         val endpoint = "${config.baseUrl.trimEnd('/')}/chat/completions"
 
@@ -74,6 +76,9 @@ internal class OpenAiConversionProvider(
     }
 
     private companion object {
+        /** gpt-5 系の推論量。IME 変換に推論は不要なため最小化してレイテンシを抑える。 */
+        const val REASONING_EFFORT = "minimal"
+
         /** 変換結果のみを出力させ、余計な説明・引用符を抑制する system prompt。 */
         const val SYSTEM_PROMPT =
             "あなたは日本語IMEのかな漢字変換エンジンです。" +
@@ -96,7 +101,12 @@ internal fun defaultConversionProvider(): ConversionProvider {
 internal fun createOpenAiHttpClient(): HttpClient {
     return HttpClient {
         install(ContentNegotiation) {
-            json(Json { ignoreUnknownKeys = true })
+            json(
+                Json {
+                    ignoreUnknownKeys = true
+                    explicitNulls = false
+                },
+            )
         }
         install(HttpTimeout) {
             requestTimeoutMillis = REQUEST_TIMEOUT_MILLIS
@@ -109,11 +119,16 @@ private const val REQUEST_TIMEOUT_MILLIS = 15_000L
 
 /**
  * chat completions API のリクエストボディ。互換性のため最小限のフィールドのみを送る。
+ *
+ * [reasoningEffort] は gpt-5 系の推論量で、null のときは送出しない（互換エンドポイント向け）。
+ * IME 変換は推論不要なので `"minimal"` を指定し、隠れ reasoning token によるレイテンシを潰す。
  */
 @Serializable
 internal data class ChatCompletionRequest(
     val model: String,
     val messages: List<ChatMessage>,
+    @SerialName("reasoning_effort")
+    val reasoningEffort: String? = null,
 )
 
 /**
