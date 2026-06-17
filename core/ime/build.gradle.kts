@@ -38,6 +38,7 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
+            implementation(projects.core.morphology)
             implementation(libs.wanakana)
             implementation(libs.napier)
             implementation(libs.ktor.core)

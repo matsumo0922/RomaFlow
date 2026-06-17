@@ -8,8 +8,8 @@ package me.matsumo.romaflow.core.ime
  */
 internal class FakeConversionProvider : ConversionProvider {
 
-    override suspend fun convert(kana: String): String {
-        var converted = kana
+    override suspend fun convert(request: ConversionRequest): String {
+        var converted = request.readingInput
 
         for ((reading, kanji) in CONVERSION_TABLE) {
             converted = converted.replace(reading, kanji)
@@ -30,6 +30,7 @@ internal class FakeConversionProvider : ConversionProvider {
             "へんかん" to "変換",
             "かんじ" to "漢字",
             "わたし" to "私",
+            "てんき" to "天気",
         )
     }
 }
