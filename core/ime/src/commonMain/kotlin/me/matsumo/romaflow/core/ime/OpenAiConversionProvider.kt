@@ -28,11 +28,11 @@ import kotlinx.serialization.json.put
  * 同じ経路が通るようにする。失敗時（API key 未設定・通信エラー・タイムアウト等）は空文字を返し、
  * 呼び出し側で「変換せず据え置き」として扱う。
  *
- * 【暫定実装の注意】これは「全文を LLM に丸ごと変換させる」call1 方式で、応答崩れ（前置き・引用符・markdown・
- * hallucination）への防御を意図的に入れていない。変換状態モデル v7 では、ここで打った通りのかな全体
- * （[ConversionRequest.readingInput]）と lock 制約を投入して全文変換し、単語単位の候補は別経路（call2）で
- * 出す二段構えへ進める。[ConversionRequest.locked] による lock 制約の送出は B2 で実装する。それまでの繋ぎなので、
- * プロンプト強化・サニタイズ・Structured Outputs はここでは未実装のままとする。
+ * [convert] は call1（全文かな漢字変換）で、[ConversionRequest.readingInput] を変換する。lock 済みの prefix が
+ * あるときは [ConversionRequest.prefixContext] を前方文脈として渡し、tail（未確定の末尾）だけを変換させる
+ * （prefix-commit 再変換）。[candidates] は call2（単語候補）で、選択文節の読みと文脈から Structured Outputs で
+ * 同音異義語・別変換候補を得る。[convert] 側は「全文を LLM に丸ごと変換させる」暫定方式のままで、応答崩れ
+ * （前置き・引用符・markdown・hallucination）への防御は意図的に最小限にとどめている。
  * 参考: Sumibi（プロンプト + API n で複数候補）, azooKey/Zenzai（従来変換器を draft とした投機的デコード）。
  */
 internal class OpenAiConversionProvider(
