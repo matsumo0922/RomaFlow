@@ -111,6 +111,13 @@ final class RomaFlowInputController: IMKInputController {
             return false
         }
 
+        // ↑/↓ や Home/End/F-key は NSEvent.characters が function-key 系 private-use Unicode
+        // (U+F700...U+F8FF) になる。これらは printable ではないので romaji buffer に混ぜず pass-through する。
+        // (←/→ は handle 側の keyCode 分岐で moveSelection に接続済み。候補窓がない B1a で ↑/↓ は何もしない)
+        if containsFunctionKey(characters) {
+            return false
+        }
+
         // 未入力状態の space はアプリにそのまま空白を入れさせる (空の marked text を出さない)
         if characters == " ", !engine.hasComposition() {
             return false
@@ -120,6 +127,16 @@ final class RomaFlowInputController: IMKInputController {
         updateMarkedText(preedit, client: client)
 
         return true
+    }
+
+    // NSEvent.characters に function-key 系 private-use Unicode (U+F700...U+F8FF) を含むか。
+    // 矢印・Home/End・F-key などの非印字キーを printable 入力から除外するために使う。
+    private func containsFunctionKey(_ characters: String) -> Bool {
+        let functionKeyRange: ClosedRange<UInt32> = 0xF700...0xF8FF
+
+        return characters.unicodeScalars.contains { scalar in
+            functionKeyRange.contains(scalar.value)
+        }
     }
 
     // Tab: 打った通りのかな全体を AI ConversionProvider で非同期に全文変換し、結果を marked テキストへ反映する。
