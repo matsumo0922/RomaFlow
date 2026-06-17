@@ -409,7 +409,7 @@ class RomaFlowEngine internal constructor(
 
         updated[targetIndex] = reverted
 
-        draft = draft.copy(segments = updated)
+        draft = draft.copy(segments = enforceLeadingLockedPrefix(updated))
     }
 
     private fun deleteSegmentTrailingKana(segment: Segment) {
@@ -588,6 +588,31 @@ class RomaFlowEngine internal constructor(
         val status = if (index <= lockEnd) SegmentStatus.Locked else segment.status
 
         return segment.copy(surface = surface, status = status)
+    }
+
+    // 「Locked は常に先頭連続 prefix（0..k）」の不変条件を回復する。先頭から最初の非 Locked 以降に残る Locked を
+    // Converted へ降格し（surface/reading/range/candidates は保持）、孤立 Locked が再変換から除外されるのを防ぐ。
+    // 中間 segment の per-segment revert で prefix が分断され得る経路でのみ呼ぶ。
+    private fun enforceLeadingLockedPrefix(segments: List<Segment>): List<Segment> {
+        val firstGap = segments.indexOfFirst { it.status != SegmentStatus.Locked }
+
+        if (firstGap < 0) {
+            return segments
+        }
+
+        return segments.mapIndexed { index, segment ->
+            demoteOrphanedLock(segment, index, firstGap)
+        }
+    }
+
+    private fun demoteOrphanedLock(segment: Segment, index: Int, firstGap: Int): Segment {
+        val isOrphanedLock = index > firstGap && segment.status == SegmentStatus.Locked
+
+        if (!isOrphanedLock) {
+            return segment
+        }
+
+        return segment.copy(status = SegmentStatus.Converted)
     }
 
     // 先頭から連続する Locked segment（prefix run）。Option A で lock は常に左から育つので 0..k の連続列になる。

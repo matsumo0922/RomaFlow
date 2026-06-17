@@ -668,6 +668,44 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun deleteBackward_demotesOrphanedLockedSegmentsToConverted() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を確定して 0..1 を Locked にする。
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("転機")
+
+        // segment 0 を選び直して per-segment revert すると、prefix の連続性が崩れる。
+        engine.moveSelectionLeft()
+        engine.deleteBackward()
+
+        // segment 0 は Unconverted へ戻り、孤立した segment 1 は Locked から Converted へ降格する。
+        assertEquals("Unconverted", engine.segmentStatus(0))
+        assertEquals("Converted", engine.segmentStatus(1))
+    }
+
+    @Test
+    fun reconvert_afterOrphanRevertReconvertsWholeInput() = runTest {
+        val recording = RecordingConversionProvider()
+        val engine = RomaFlowEngine(recording, RECONVERT_SEGMENTER, FakeAligner())
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("転機")
+        engine.moveSelectionLeft()
+        engine.deleteBackward()
+
+        // 孤立 Locked が無いので lockedPrefix は空＝tail は全文。再変換で全体が再変換対象になる。
+        engine.convert()
+
+        val request = requireNotNull(recording.lastRequest)
+        assertEquals("わたしてんき", request.readingInput)
+        assertEquals("", request.prefixContext)
+    }
+
+    @Test
     fun reconvert_isNoOpWhenAllSegmentsLocked() = runTest {
         val engine = newEngine(RECONVERT_SEGMENTER)
         engine.inputRomaji("watashitenki")
