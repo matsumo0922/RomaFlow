@@ -133,6 +133,19 @@ final class RomaFlowInputController: IMKInputController {
         return !modifiers.intersection([.command, .control, .option]).isEmpty
     }
 
+    // 修飾なしの数字キー 1〜9（番号付き候補の選択キー）か。0 や修飾付き・複数文字は対象外。
+    private func isUnmodifiedDigitSelectionKey(_ event: NSEvent) -> Bool {
+        if hasCommandLikeModifier(event) {
+            return false
+        }
+
+        guard let characters = event.charactersIgnoringModifiers, characters.count == 1 else {
+            return false
+        }
+
+        return ("1"..."9").contains(characters)
+    }
+
     // 印字可能な文字を engine に渡し、変換後の preedit を未確定 (marked) テキストとして表示する。
     // 変換済 segments があっても確定はせず、追記分は未変換かな tail として混在 preedit に積む (frozen かな)。
     private func handlePrintable(_ event: NSEvent, client: IMKTextInput) -> Bool {
@@ -318,9 +331,17 @@ final class RomaFlowInputController: IMKInputController {
     // 候補窓表示中のキー処理。↑↓ は窓へ転送して選択移動、Enter は確定 (prefix lock)、Esc は窓だけ閉じ、
     // ←→ は隣の文節へ移る。それ以外は表示中の preedit を残したまま候補 session を閉じて通常処理へ落とす。
     private func handleCandidateWindowEvent(_ event: NSEvent, client: IMKTextInput) -> Bool {
+        // 修飾なしの数字キー 1〜9 は番号付き候補の選択として候補窓へ転送する (選択時 candidateSelected が発火)。
+        // keyCode は配列依存なので、入力文字が単一の "1"〜"9" かどうかで判定する。0 や修飾付きは対象外。
+        if isUnmodifiedDigitSelectionKey(event) {
+            candidateWindow.interpretKeyEvents([event])
+
+            return true
+        }
+
         switch Int(event.keyCode) {
         case keyCodeArrowUp, keyCodeArrowDown, keyCodeReturn, keyCodeKeypadEnter:
-            // 上下 navigation と確定キーは候補窓へ転送する。確定時は candidateSelected(_:) が呼ばれる。
+            // 上下 navigation・確定キー・数字キーは候補窓へ転送する。確定時は candidateSelected(_:) が呼ばれる。
             // navigation 中は candidateSelectionChanged(_:) 経由で live preview が走る (発火しない client では preview なし)。
             candidateWindow.interpretKeyEvents([event])
 
