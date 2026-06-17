@@ -240,16 +240,15 @@ class RomaFlowEngine internal constructor(
     fun confirmCandidate(text: String): String {
         invalidateCandidateSession()
 
-        val segmentIndex = selectedSegmentIndexOrNull()
-        val isInRange = segmentIndex != null && segmentIndex in draft.segments.indices
+        val segmentIndex = selectedSegmentIndexOrNull() ?: return preeditText()
 
-        if (!isInRange) {
+        if (segmentIndex !in draft.segments.indices) {
             return preeditText()
         }
 
-        applyCandidateAndLockPrefix(requireNotNull(segmentIndex), text)
+        applyCandidateAndLockPrefix(segmentIndex, text)
 
-        draft = draft.copy(selection = Selection.Word(requireNotNull(segmentIndex)))
+        draft = draft.copy(selection = Selection.Word(segmentIndex))
 
         return preeditText()
     }
