@@ -20,6 +20,9 @@ kotlin {
         commonMain.dependencies {
             implementation(libs.momiji.core)
             implementation(libs.momiji.ipadic)
+
+            // data class の安定性アノテーション(@Immutable)用。compose runtime のみを参照する。
+            implementation(libs.compose.runtime)
         }
 
         commonTest.dependencies {
