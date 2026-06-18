@@ -697,7 +697,7 @@ class RomaFlowEngine internal constructor(
         return builder.toString()
     }
 
-    // 選択中の文節に対する候補列（自明候補 + LLM 候補）。未選択 / 未変換対象なら空。
+    // 選択中の文節に対する候補列（自明候補 + 辞書候補 + LLM 候補）。未選択 / 未変換対象なら空。
     private fun currentCandidates(): List<String> {
         val segmentIndex = selectedSegmentIndexOrNull() ?: return emptyList()
         val segment = draft.segments.getOrNull(segmentIndex) ?: return emptyList()
