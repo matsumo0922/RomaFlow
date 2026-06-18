@@ -25,6 +25,12 @@ final class RomaFlowInputController: IMKInputController {
     // insertText / setMarkedText で「置換範囲を指定しない」ことを示す range
     private let notFoundRange = NSRange(location: NSNotFound, length: 0)
 
+    // 候補窓に一度に並べる候補の上限。窓が縦に伸びすぎて入力位置を覆わないよう控えめにする。
+    private let maxVisibleCandidates = 9
+
+    // 候補窓の候補テキストの描画フォントサイズ。標準より小さくして窓を低くする (選択キーは影響を受けない)。
+    private let candidateFontSize: CGFloat = 12
+
     // marked text の下線スタイル。未選択 clause は細い実線、選択中 clause は太い実線。
     private let thinUnderline = NSUnderlineStyle.single.rawValue
 
@@ -43,7 +49,20 @@ final class RomaFlowInputController: IMKInputController {
         candidateWindow = IMKCandidates(server: server, panelType: kIMKSingleColumnScrollingCandidatePanel)
         super.init(server: server, delegate: delegate, client: inputClient)
 
+        configureCandidateWindowAppearance()
+
         NSLog("RomaFlowInputController connected: %@", engine.smokeText())
+    }
+
+    // 候補窓の見た目を設定する。NSFontAttributeName で候補テキストのフォントサイズを下げて窓を低くする。
+    // IMKCandidates.setAttributes の NSFontAttributeName はフォント (= サイズ) を指定するための公式 key
+    // (InputMethodKit SDK header 記載)。選択キーのフォントには影響しない。
+    private func configureCandidateWindowAppearance() {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: candidateFontSize),
+        ]
+
+        candidateWindow.setAttributes(attributes)
     }
 
     // 入力処理はこのメソッドに集約する。処理したイベントでは super を呼ばず、二重更新を防ぐ。
@@ -351,15 +370,16 @@ final class RomaFlowInputController: IMKInputController {
         case keyCodeArrowLeft:
             if hasCommandLikeModifier(event) { break }
 
-            // 隣の文節へ移る前に preview session を明示破棄する (Esc/Tab 経路と一貫させる)。
-            // moveSelection も内部で session を invalidate するため二重 invalidate だが挙動は変わらない。
-            _ = engine.closeCandidates()
+            // 隣の文節へ移る前に現在の候補を確定＋lock する (azooKey 式・通った文節まで lock)。
+            // lockSelectedClause が選択 index を維持するので、続く moveSelection で隣文節へ進める。
+            _ = engine.lockSelectedClause()
 
             return handleMoveSelection(toRight: false, client: client)
         case keyCodeArrowRight:
             if hasCommandLikeModifier(event) { break }
 
-            _ = engine.closeCandidates()
+            // 隣の文節へ移る前に現在の候補を確定＋lock する (azooKey 式・通った文節まで lock)。
+            _ = engine.lockSelectedClause()
 
             return handleMoveSelection(toRight: true, client: client)
         case keyCodeTab:
@@ -411,6 +431,7 @@ final class RomaFlowInputController: IMKInputController {
 
     // 候補窓へ表示する候補を返す。IMKCandidates.update() から呼ばれる (第5章 5.2)。
     // Swift Export 越しに List を出せないため、engine の indexed accessor を回して [String] に組む。
+    // 窓が縦に伸びすぎないよう、表示件数は maxVisibleCandidates でキャップする (空窓 gate は syncCandidateWindowToSelection 側に据え置き)。
     override func candidates(_ sender: Any!) -> [Any] {
         let count = Int(engine.candidateCount())
 
@@ -418,8 +439,9 @@ final class RomaFlowInputController: IMKInputController {
             return []
         }
 
+        let visibleCount = min(count, maxVisibleCandidates)
         var collected: [String] = []
-        for index in 0..<count {
+        for index in 0..<visibleCount {
             collected.append(engine.candidateText(index: Int32(index)))
         }
 
@@ -442,8 +464,8 @@ final class RomaFlowInputController: IMKInputController {
 
     // 候補窓で候補が確定された (Enter / クリック / 数字キー) ときに呼ばれる (第5章 5.4)。
     // B2 は confirm = prefix lock であり commit ではない。engine.confirmCandidate(text:) で選択文節へ適用＋
-    // 先頭からその文節までを Locked にし、窓を閉じる。文節選択 (Word) は維持され ←/→ で隣へ進める。
-    // 最終的な全体 commit は窓が閉じた状態の Enter (performCommit) が担う。
+    // 先頭からその文節までを Locked にし、窓を閉じる。確定後はカーソルを文末へ移す (選択解除・selectedSegmentIndex == -1)。
+    // 次の Enter (窓が閉じた状態の performCommit) で全体 commit する。
     override func candidateSelected(_ candidateString: NSAttributedString!) {
         let selected = candidateString?.string ?? ""
 
@@ -458,6 +480,8 @@ final class RomaFlowInputController: IMKInputController {
     }
 
     // 選択候補を prefix lock として確定し、候補窓を閉じて marked text を更新する。candidateSelected の本体。
+    // confirmCandidate の戻り preedit をそのまま反映する。confirm 後は selection=None なので
+    // updateMarkedText → applyClauseSegments が selectedRange=nil を返し、buildMarkedText がキャレットを文末へ置く。
     private func confirmSelectedCandidate(_ text: String, client: IMKTextInput) {
         cancelPendingCandidates()
         let preedit = engine.confirmCandidate(text: text)
