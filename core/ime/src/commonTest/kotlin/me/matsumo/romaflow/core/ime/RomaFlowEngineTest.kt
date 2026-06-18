@@ -487,6 +487,26 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun confirmCandidate_prefersLivePreviewOverPassedText() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を選択し live preview で「転機」を表示中（candidateSelectionChanged 相当）。
+        engine.moveSelectionLeft()
+        engine.previewCandidate("転機")
+
+        // 候補窓の reload で IMK の選択 index がズレ、candidateSelected が別文字列「テンキ」を渡しても、
+        // ユーザーが見ている preview「転機」を優先して確定する（ハイライトと確定の不一致を防ぐ）。
+        val preedit = engine.confirmCandidate("テンキ")
+
+        assertEquals("私転機", preedit)
+        assertEquals("転機", engine.segmentText(1))
+        assertEquals("Locked", engine.segmentStatus(1))
+        assertEquals(-1, engine.selectedSegmentIndex())
+    }
+
+    @Test
     fun confirmCandidate_keepsExistingPrefixWhenReselectingEarlierSegment() = runTest {
         val engine = newEngine(WATASHI_TENKI_SEGMENTER)
         engine.inputRomaji("watashitenki")

@@ -231,11 +231,13 @@ class RomaFlowEngine internal constructor(
     }
 
     /**
-     * Enter 確定時に呼ぶ。選択中の文節へ候補 [text] を適用し prefix lock した上で選択解除（カーソル文末）して preedit を返す。
+     * Enter 確定時に呼ぶ。選択中の文節を確定して prefix lock し、選択解除（カーソル文末）して preedit を返す。
      *
-     * commit はせず draft の更新だけ行う（lock 再変換の consume は後続タスク）。選択が draft.segments の
-     * 範囲外・None なら no-op。lock 範囲は 0..max(現在の最大 Locked index, 選択 index) で、確定済み prefix を
-     * 壊さず途中の文節だけ差し替えられるようにする。確定後の selection は [Selection.None]（カーソル文末）にする。
+     * 確定する候補は、候補窓で preview 中（live preview = ユーザーが見ているハイライト）ならその文字列を優先し、
+     * preview が無い（candidateSelectionChanged が発火しない client 等）ときだけ引数 [text] を使う。候補窓の reload で
+     * IMK の選択 index と確定文字列がズレても、ユーザーが見ている preview と確定内容が一致するようにするための優先順。
+     * commit はせず draft の更新だけ行う。選択が draft.segments の範囲外・None なら no-op。lock 範囲は
+     * 0..max(現在の最大 Locked index, 選択 index) で確定済み prefix を壊さない。確定後の selection は [Selection.None]。
      */
     fun confirmCandidate(text: String): String {
         invalidateCandidateSession()
@@ -246,7 +248,9 @@ class RomaFlowEngine internal constructor(
             return preeditText()
         }
 
-        applyCandidateAndLockPrefix(segmentIndex, text)
+        val surface = currentPreviewSurfaceOrNull() ?: text
+
+        applyCandidateAndLockPrefix(segmentIndex, surface)
 
         draft = draft.copy(selection = Selection.None)
 
@@ -594,14 +598,19 @@ class RomaFlowEngine internal constructor(
     // ←/→ 直前の lock で確定する surface を決める。preview 中（Candidate）かつ previewSurface 非空ならその候補、
     // そうでなければ現 surface を維持する。
     private fun clauseSurfaceToLock(segmentIndex: Int): String {
+        return currentPreviewSurfaceOrNull() ?: draft.segments[segmentIndex].surface
+    }
+
+    // 候補窓で現在 preview 中の候補文字列。Candidate 選択かつ非空のときだけ返す（live preview = ユーザーが見ているハイライト）。
+    private fun currentPreviewSurfaceOrNull(): String? {
         val selection = draft.selection
         val hasPreview = selection is Selection.Candidate && selection.previewSurface.isNotEmpty()
 
-        if (hasPreview) {
-            return (selection as Selection.Candidate).previewSurface
+        if (!hasPreview) {
+            return null
         }
 
-        return draft.segments[segmentIndex].surface
+        return (selection as Selection.Candidate).previewSurface
     }
 
     // 選択中の文節へ候補 surface を適用し、0..max(現在の最大 Locked index, 選択 index) を Locked にする。
