@@ -25,11 +25,8 @@ final class RomaFlowInputController: IMKInputController {
     // insertText / setMarkedText で「置換範囲を指定しない」ことを示す range
     private let notFoundRange = NSRange(location: NSNotFound, length: 0)
 
-    // 候補窓に一度に並べる候補の上限。窓が縦に伸びすぎて入力位置を覆わないよう控えめにする。
-    private let maxVisibleCandidates = 9
-
-    // 候補窓の候補テキストの描画フォントサイズ。標準より小さくして窓を低くする (選択キーは影響を受けない)。
-    private let candidateFontSize: CGFloat = 12
+    // 候補窓に一度に並べる候補の上限。スクロール式パネルの表示行数より少なくして窓を低く保つ。
+    private let maxVisibleCandidates = 5
 
     // marked text の下線スタイル。未選択 clause は細い実線、選択中 clause は太い実線。
     private let thinUnderline = NSUnderlineStyle.single.rawValue
@@ -49,20 +46,7 @@ final class RomaFlowInputController: IMKInputController {
         candidateWindow = IMKCandidates(server: server, panelType: kIMKSingleColumnScrollingCandidatePanel)
         super.init(server: server, delegate: delegate, client: inputClient)
 
-        configureCandidateWindowAppearance()
-
         NSLog("RomaFlowInputController connected: %@", engine.smokeText())
-    }
-
-    // 候補窓の見た目を設定する。NSFontAttributeName で候補テキストのフォントサイズを下げて窓を低くする。
-    // IMKCandidates.setAttributes の NSFontAttributeName はフォント (= サイズ) を指定するための公式 key
-    // (InputMethodKit SDK header 記載)。選択キーのフォントには影響しない。
-    private func configureCandidateWindowAppearance() {
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: candidateFontSize),
-        ]
-
-        candidateWindow.setAttributes(attributes)
     }
 
     // 入力処理はこのメソッドに集約する。処理したイベントでは super を呼ばず、二重更新を防ぐ。
