@@ -3,14 +3,14 @@ package me.matsumo.romaflow.core.morphology
 /**
  * IPADIC を素材にした [HomophoneDictionary] の本番実装。
  *
- * [IpadicDictReader.readEntries] が返す全エントリ（reading はカタカナ）を、
+ * [IpadicEntrySource.readEntries] が返す全エントリ（reading はカタカナ）を、
  * ひらがなキー → 表層候補リストの逆引き index に1回だけ変換してキャッシュする。
  * index 構築は重い（数十万件）ため [reverseIndex] を `by lazy` とし、初回の
  * [homophoneCandidates] 呼び出し時にのみ構築する。
  */
-class IpadicHomophoneDictionary(private val reader: IpadicDictReader = IpadicDictReader()) : HomophoneDictionary {
+class IpadicHomophoneDictionary(private val source: IpadicEntrySource = IpadicDictReader()) : HomophoneDictionary {
 
-    private val reverseIndex: Map<String, List<String>> by lazy { buildReverseIndex(reader.readEntries()) }
+    private val reverseIndex: Map<String, List<String>> by lazy { buildReverseIndex(source.readEntries()) }
 
     override fun homophoneCandidates(reading: String): List<String> {
         val normalizedKey = normalizeReadingKey(reading)

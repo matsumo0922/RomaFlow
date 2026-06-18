@@ -9,7 +9,7 @@ package me.matsumo.romaflow.core.morphology
  *
  * decode + parse + DFS は重いため [readEntries] の結果を初回のみ計算し内部にキャッシュする。
  */
-open class IpadicDictReader {
+class IpadicDictReader : IpadicEntrySource {
 
     private val cachedEntries: List<IpadicEntry> by lazy { parseAllEntries() }
 
@@ -19,7 +19,7 @@ open class IpadicDictReader {
      * 読みが空または "*" のエントリは除外する。重複（同綴り・同読みの別 token など）は
      * この段階では除外しない。
      */
-    open fun readEntries(): List<IpadicEntry> = cachedEntries
+    override fun readEntries(): List<IpadicEntry> = cachedEntries
 
     private fun parseAllEntries(): List<IpadicEntry> {
         val bytes = loadSysDicBytes()

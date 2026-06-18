@@ -102,8 +102,8 @@ class IpadicHomophoneDictionaryTest {
     }
 }
 
-/** 合成エントリを返すテスト用の [IpadicDictReader]。実 sys.dic を読まず即座に確定値を返す。 */
-private class FakeIpadicDictReader(private val entries: List<IpadicEntry>) : IpadicDictReader() {
+/** 合成エントリを返すテスト用の [IpadicEntrySource]。実 sys.dic を読まず即座に確定値を返す。 */
+private class FakeIpadicDictReader(private val entries: List<IpadicEntry>) : IpadicEntrySource {
 
     override fun readEntries(): List<IpadicEntry> = entries
 }
