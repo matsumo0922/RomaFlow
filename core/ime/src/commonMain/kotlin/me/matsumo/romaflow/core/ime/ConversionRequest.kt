@@ -1,26 +1,14 @@
 package me.matsumo.romaflow.core.ime
 
 /**
- * call1（全文かな漢字変換）で LLM へ渡す lock 制約の 1 件。
+ * call1（かな漢字変換）の provider への入力。
  *
- * 全文再変換時に locked された segment を固定スプライスし直すための再同定アンカー。
- * [lockId] は session-local 一意 ID、[range] は readingInput 上のスパン、[leftReading] / [rightReading] は
- * 近傍読み（同一 surface が複数あっても固定先を誤らないための曖昧性回避）。B1a では生成せず B2 で使用する。
- */
-internal data class LockedSpan(
-    val lockId: Int,
-    val range: TextRange,
-    val surface: String,
-    val leftReading: String,
-    val rightReading: String,
-)
-
-/**
- * call1（全文かな漢字変換）の provider への入力。
- *
- * [readingInput] は打った通りのかな全体、[locked] は固定する segment の制約。B1a では [locked] は常に空。
+ * prefix-commit（Option A）方式の lock に対応する。lock 無しの初回変換では [readingInput] に打った通りの
+ * かな全体、[prefixContext] は空文字。lock 有りの再変換では先頭から連続する確定済み（Locked）文節を prefix
+ * として切り出し、その surface 結合を [prefixContext]、残りの未確定読み（tail）を [readingInput] に渡す。
+ * provider は [prefixContext] を前方文脈として [readingInput] を変換する。
  */
 internal data class ConversionRequest(
     val readingInput: String,
-    val locked: List<LockedSpan>,
+    val prefixContext: String,
 )

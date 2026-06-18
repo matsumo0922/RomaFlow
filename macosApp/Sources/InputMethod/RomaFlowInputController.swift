@@ -7,6 +7,9 @@ import RomaFlowImeCore
 final class RomaFlowInputController: IMKInputController {
     private let engine = RomaFlowEngine()
 
+    // 文節単位の変換候補を表示する縦一列の候補窓 (第5章)。文節選択中だけ表示する。
+    private let candidateWindow: IMKCandidates
+
     // 入力経路を handle(_:client:) に一本化するためのキーコード定数 (US 配列基準の物理キー番号)
     private let keyCodeReturn = 36
 
@@ -16,9 +19,14 @@ final class RomaFlowInputController: IMKInputController {
     private let keyCodeTab = 48
     private let keyCodeArrowLeft = 123
     private let keyCodeArrowRight = 124
+    private let keyCodeArrowDown = 125
+    private let keyCodeArrowUp = 126
 
     // insertText / setMarkedText で「置換範囲を指定しない」ことを示す range
     private let notFoundRange = NSRange(location: NSNotFound, length: 0)
+
+    // 候補窓に一度に並べる候補の上限。スクロール式パネルの表示行数より少なくして窓を低く保つ。
+    private let maxVisibleCandidates = 5
 
     // marked text の下線スタイル。未選択 clause は細い実線、選択中 clause は太い実線。
     private let thinUnderline = NSUnderlineStyle.single.rawValue
@@ -28,7 +36,14 @@ final class RomaFlowInputController: IMKInputController {
     // 実行中の AI 変換 Task。後続入力で stale 結果を破棄するためにキャンセルする。
     private var conversionTask: Task<Void, Never>?
 
+    // 実行中の call2 (単語候補) Task。文節移動・確定・窓閉・新規入力で stale なのでキャンセルする。
+    private var candidatesTask: Task<Void, Never>?
+
+    // 候補窓を表示中かどうか。表示中はキー入力を候補窓操作へ振り分ける。
+    private var isCandidateWindowVisible = false
+
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
+        candidateWindow = IMKCandidates(server: server, panelType: kIMKSingleColumnScrollingCandidatePanel)
         super.init(server: server, delegate: delegate, client: inputClient)
 
         NSLog("RomaFlowInputController connected: %@", engine.smokeText())
@@ -38,6 +53,11 @@ final class RomaFlowInputController: IMKInputController {
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event, event.type == .keyDown, let client = sender as? IMKTextInput else {
             return false
+        }
+
+        // 候補窓を表示中は、まず候補操作 (↑↓ 移動・Enter 確定・Esc 閉じ・←→ 隣文節) として処理する。
+        if isCandidateWindowVisible {
+            return handleCandidateWindowEvent(event, client: client)
         }
 
         // 新しいキー入力が来たら実行中の AI 変換は stale なのでキャンセルする。
@@ -80,9 +100,11 @@ final class RomaFlowInputController: IMKInputController {
     override func setValue(_ value: Any!, forTag tag: Int, client sender: Any!) {
         super.setValue(value, forTag: tag, client: sender)
 
-        // 入力モード切替時は in-flight の AI 変換を止め、表示中の composition を WYSIWYG 確定する (issue #8)。
-        // これをしないと、切替後に遅れて返った変換結果が marked text として復活してしまう。
+        // 入力モード切替時は in-flight の AI 変換 / call2 を止め、候補窓を閉じ、表示中の composition を
+        // WYSIWYG 確定する (issue #8)。これをしないと、切替後に遅れて返った結果が marked text として復活する。
         cancelPendingConversion()
+        cancelPendingCandidates()
+        hideCandidateWindow()
         if let client = sender as? IMKTextInput {
             _ = performCommit(with: client)
         }
@@ -102,6 +124,8 @@ final class RomaFlowInputController: IMKInputController {
         }
 
         cancelPendingConversion()
+        cancelPendingCandidates()
+        hideCandidateWindow()
         _ = performCommit(with: client)
     }
 
@@ -110,6 +134,21 @@ final class RomaFlowInputController: IMKInputController {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
         return !modifiers.intersection([.command, .control, .option]).isEmpty
+    }
+
+    // 番号付き候補の選択キー（実際に入力される文字が 1〜9）か。Cmd/Ctrl/Option 付きや、Shift+数字 (= "!" 等
+    // 記号になるもの)・0・複数文字は対象外。charactersIgnoringModifiers だと Shift+1 も "1" と判定され記号入力を
+    // 奪うため、実入力文字 event.characters で判定する。
+    private func isUnmodifiedDigitSelectionKey(_ event: NSEvent) -> Bool {
+        if hasCommandLikeModifier(event) {
+            return false
+        }
+
+        guard let characters = event.characters, characters.count == 1 else {
+            return false
+        }
+
+        return ("1"..."9").contains(characters)
     }
 
     // 印字可能な文字を engine に渡し、変換後の preedit を未確定 (marked) テキストとして表示する。
@@ -211,8 +250,14 @@ final class RomaFlowInputController: IMKInputController {
         conversionTask = nil
     }
 
-    // ←/→: 変換済＋未変換かなの単語選択カーソルを移動する。未確定でなければアプリ側へ流す。
-    // B1a は plain marked text のため選択強調は描画せず、内部の選択状態だけ更新する (強調は B1c)。
+    private func cancelPendingCandidates() {
+        candidatesTask?.cancel()
+        candidatesTask = nil
+    }
+
+    // ←/→: 変換済＋未変換かなの文節選択カーソルを移動する。未確定でなければアプリ側へ流す。
+    // 文節を選択したら候補窓を開き (自明候補が即表示) call2 を非同期発火、選択が外れたら窓を閉じる。
+    // engine.moveSelection は内部で candidate session を invalidate するので、移動のたび call2 stale guard が働く。
     private func handleMoveSelection(toRight: Bool, client: IMKTextInput) -> Bool {
         guard engine.hasComposition() else {
             return false
@@ -221,7 +266,31 @@ final class RomaFlowInputController: IMKInputController {
         let preedit = toRight ? engine.moveSelectionRight() : engine.moveSelectionLeft()
         updateMarkedText(preedit, client: client)
 
+        syncCandidateWindowToSelection(client: client)
+
         return true
+    }
+
+    // 現在の文節選択に候補窓の表示状態を合わせる。候補のある文節を選択中なら開く/reload、それ以外は閉じる。
+    // call2 は文節が変わるたびに旧 Task を cancel して新規発火する (engine 側の stale guard と二重で守る)。
+    // 文節ハイライト (marked text) は呼び出し元の moveSelection 側で更新済みなので、ここは窓だけ管理する。
+    private func syncCandidateWindowToSelection(client: IMKTextInput) {
+        let hasSelectedClause = engine.selectedSegmentIndex() >= 0
+
+        // 未変換 tail 文節など候補が無い文節 (candidateCount == 0) では空の候補窓を出さない。
+        // candidates(_:) override も [] を返すので、show 経路でも同じ条件で揃える。
+        let hasCandidates = engine.candidateCount() > 0
+        let shouldShowWindow = hasSelectedClause && hasCandidates
+
+        guard shouldShowWindow else {
+            hideCandidateWindow()
+            cancelPendingCandidates()
+
+            return
+        }
+
+        showCandidateWindow()
+        startWordCandidatesTask(client: client)
     }
 
     // 未確定中なら確定文字列を挿入し marked テキストを消す。未確定でなければ false を返してアプリ側に流す。
@@ -262,6 +331,193 @@ final class RomaFlowInputController: IMKInputController {
         updateMarkedText(preedit, client: client)
 
         return true
+    }
+
+    // 候補窓表示中のキー処理。↑↓ は窓へ転送して選択移動、Enter は確定 (prefix lock)、Esc は窓だけ閉じ、
+    // ←→ は隣の文節へ移る。それ以外は表示中の preedit を残したまま候補 session を閉じて通常処理へ落とす。
+    private func handleCandidateWindowEvent(_ event: NSEvent, client: IMKTextInput) -> Bool {
+        // 修飾なしの数字キー 1〜9 は番号付き候補の選択として候補窓へ転送する (選択時 candidateSelected が発火)。
+        // keyCode は配列依存なので、入力文字が単一の "1"〜"9" かどうかで判定する。0 や修飾付きは対象外。
+        if isUnmodifiedDigitSelectionKey(event) {
+            candidateWindow.interpretKeyEvents([event])
+
+            return true
+        }
+
+        switch Int(event.keyCode) {
+        case keyCodeArrowUp, keyCodeArrowDown, keyCodeReturn, keyCodeKeypadEnter:
+            // 上下 navigation・確定キー・数字キーは候補窓へ転送する。確定時は candidateSelected(_:) が呼ばれる。
+            // navigation 中は candidateSelectionChanged(_:) 経由で live preview が走る (発火しない client では preview なし)。
+            candidateWindow.interpretKeyEvents([event])
+
+            return true
+        case keyCodeEscape:
+            return closeCandidateSession(client: client)
+        case keyCodeArrowLeft:
+            if hasCommandLikeModifier(event) { break }
+
+            // 隣の文節へ移る前に現在の候補を確定＋lock する (azooKey 式・通った文節まで lock)。
+            // lockSelectedClause が選択 index を維持するので、続く moveSelection で隣文節へ進める。
+            _ = engine.lockSelectedClause()
+
+            return handleMoveSelection(toRight: false, client: client)
+        case keyCodeArrowRight:
+            if hasCommandLikeModifier(event) { break }
+
+            // 隣の文節へ移る前に現在の候補を確定＋lock する (azooKey 式・通った文節まで lock)。
+            _ = engine.lockSelectedClause()
+
+            return handleMoveSelection(toRight: true, client: client)
+        case keyCodeTab:
+            // Tab は再変換 (lock prefix を保持して tail だけ再変換)。窓を閉じてから変換へ入る。
+            cancelPendingConversion()
+            cancelPendingCandidates()
+            hideCandidateWindow()
+            _ = engine.closeCandidates()
+
+            return handleConvert(event, client: client)
+        default:
+            break
+        }
+
+        // 上記以外 (印字文字・backspace 等) は preview を破棄して候補 session を閉じ、通常の handle 経路で処理する。
+        _ = closeCandidateSession(client: client)
+
+        return fallthroughAfterCandidateClose(event, client: client)
+    }
+
+    // 候補窓を閉じ、preview を破棄して文節選択 (Word) へ戻す。preedit は marked のまま残る。
+    private func closeCandidateSession(client: IMKTextInput) -> Bool {
+        cancelPendingCandidates()
+        hideCandidateWindow()
+        let preedit = engine.closeCandidates()
+        updateMarkedText(preedit, client: client)
+
+        return true
+    }
+
+    // 候補窓を閉じた後、navigation でないキーを通常経路へ落とす。修飾なしの印字文字なら handlePrintable で
+    // 表示中の変換結果へ追記入力し、それ以外 (backspace・ショートカット等) は通常の handle 分岐へ委ねる。
+    private func fallthroughAfterCandidateClose(_ event: NSEvent, client: IMKTextInput) -> Bool {
+        switch Int(event.keyCode) {
+        case keyCodeDelete:
+            return handleBackspace(with: client)
+        default:
+            break
+        }
+
+        if hasCommandLikeModifier(event) {
+            _ = performCommit(with: client)
+
+            return false
+        }
+
+        return handlePrintable(event, client: client)
+    }
+
+    // 候補窓へ表示する候補を返す。IMKCandidates.update() から呼ばれる (第5章 5.2)。
+    // Swift Export 越しに List を出せないため、engine の indexed accessor を回して [String] に組む。
+    // 窓が縦に伸びすぎないよう、表示件数は maxVisibleCandidates でキャップする (空窓 gate は syncCandidateWindowToSelection 側に据え置き)。
+    override func candidates(_ sender: Any!) -> [Any] {
+        let count = Int(engine.candidateCount())
+
+        guard count > 0 else {
+            return []
+        }
+
+        let visibleCount = min(count, maxVisibleCandidates)
+        var collected: [String] = []
+        for index in 0..<visibleCount {
+            collected.append(engine.candidateText(index: Int32(index)))
+        }
+
+        return collected
+    }
+
+    // 候補窓で選択中の候補が変わったとき (↑↓ navigation 中) に呼ばれる live preview callback。
+    // engine.previewCandidate(text:) で marked text を更新するだけで確定はしない。
+    // この callback が発火しない client では preview が出ないだけで confirm 経路 (candidateSelected) は成立する。
+    override func candidateSelectionChanged(_ candidateString: NSAttributedString!) {
+        let preview = candidateString?.string ?? ""
+
+        guard !preview.isEmpty, let client = client() as? IMKTextInput else {
+            return
+        }
+
+        let preedit = engine.previewCandidate(text: preview)
+        updateMarkedText(preedit, client: client)
+    }
+
+    // 候補窓で候補が確定された (Enter / クリック / 数字キー) ときに呼ばれる (第5章 5.4)。
+    // B2 は confirm = prefix lock であり commit ではない。engine.confirmCandidate(text:) で選択文節へ適用＋
+    // 先頭からその文節までを Locked にし、窓を閉じる。確定後はカーソルを文末へ移す (選択解除・selectedSegmentIndex == -1)。
+    // 次の Enter (窓が閉じた状態の performCommit) で全体 commit する。
+    override func candidateSelected(_ candidateString: NSAttributedString!) {
+        let selected = candidateString?.string ?? ""
+
+        guard !selected.isEmpty, let client = client() as? IMKTextInput else {
+            return
+        }
+
+        // IMKCandidates の event 処理中に呼ばれるため、再入を避けて main queue に積む (reference 5.4)。
+        DispatchQueue.main.async { [weak self] in
+            self?.confirmSelectedCandidate(selected, client: client)
+        }
+    }
+
+    // 選択候補を prefix lock として確定し、候補窓を閉じて marked text を更新する。candidateSelected の本体。
+    // confirmCandidate の戻り preedit をそのまま反映する。confirm 後は selection=None なので
+    // updateMarkedText → applyClauseSegments が selectedRange=nil を返し、buildMarkedText がキャレットを文末へ置く。
+    private func confirmSelectedCandidate(_ text: String, client: IMKTextInput) {
+        cancelPendingCandidates()
+        let preedit = engine.confirmCandidate(text: text)
+        hideCandidateWindow()
+        updateMarkedText(preedit, client: client)
+    }
+
+    // 候補窓を表示 (または別文節へ移ったので reload) する。候補が無ければ表示しない。
+    private func showCandidateWindow() {
+        candidateWindow.update()
+        candidateWindow.show()
+        isCandidateWindowVisible = true
+    }
+
+    private func hideCandidateWindow() {
+        candidateWindow.hide()
+        isCandidateWindowVisible = false
+    }
+
+    // 選択中の文節について call2 (LLM 単語候補) を非同期に要求し、結果を自明候補へマージして窓を reload する。
+    // 旧 Task を cancel してから発火する。stale 結果は engine 側の candidateRequestId guard でも弾かれる。
+    private func startWordCandidatesTask(client: IMKTextInput) {
+        cancelPendingCandidates()
+
+        candidatesTask = Task { @MainActor [weak self] in
+            await self?.runWordCandidates(client: client)
+        }
+    }
+
+    // call2 を実行し、結果を main スレッドで候補へ反映して窓を reload する。失敗・キャンセル・空結果・stale は据え置く。
+    @MainActor
+    private func runWordCandidates(client: IMKTextInput) async {
+        if Task.isCancelled {
+            return
+        }
+
+        let result = (try? await engine.requestWordCandidates()) ?? ""
+
+        if Task.isCancelled || result.isEmpty {
+            return
+        }
+
+        let preedit = engine.applyWordCandidates(result: result)
+
+        guard isCandidateWindowVisible else {
+            return
+        }
+
+        candidateWindow.update()
+        updateMarkedText(preedit, client: client)
     }
 
     private func updateMarkedText(_ text: String, client: IMKTextInput) {

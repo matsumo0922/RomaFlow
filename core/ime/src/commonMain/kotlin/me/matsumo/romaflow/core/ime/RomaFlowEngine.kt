@@ -1,5 +1,7 @@
 package me.matsumo.romaflow.core.ime
 
+import kotlinx.serialization.json.Json
+
 /**
  * RomaFlow IME core の変換 draft を保持するエンジン。
  *
@@ -30,6 +32,13 @@ class RomaFlowEngine internal constructor(
 
     // 実行中の変換要求が発行されたときの入力リビジョン。結果適用時にこれが現在値と一致するか確認する。
     private var pendingConversionRevision = -1
+
+    // 候補窓セッションのリビジョン。inputRevision とは独立に call2 の stale を判定する。
+    // 選択変更・入力変更・session 終了操作で増やす（previewCandidate の窓内ナビでは増やさない）。
+    private var candidateRequestId = 0
+
+    // 実行中の call2 要求が発行されたときの candidateRequestId。結果適用時にこれが現在値と一致するか確認する。
+    private var pendingCandidateRequestId = -1
 
     /** Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner を使う constructor。 */
     constructor() : this(defaultConversionProvider(), MomijiSegmenter(), DpReadingAligner())
@@ -86,9 +95,20 @@ class RomaFlowEngine internal constructor(
             return ""
         }
 
+        invalidateCandidateSession()
+
         pendingConversionRevision = inputRevision
 
-        val request = ConversionRequest(readingInput, emptyList())
+        val prefixEnd = lockedPrefixEnd()
+        val prefixContext = lockedPrefixContext()
+        val tailReading = readingInput.substring(prefixEnd.coerceIn(0, readingInput.length))
+
+        // 全 segment が Locked なら変換対象が無い。applyConversion 側で no-op になる空文字を返す。
+        if (tailReading.isEmpty()) {
+            return ""
+        }
+
+        val request = ConversionRequest(tailReading, prefixContext)
 
         return conversionProvider.convert(request)
     }
@@ -103,7 +123,12 @@ class RomaFlowEngine internal constructor(
             return ""
         }
 
-        draft = draft.copy(segments = buildSegments(result), selection = Selection.None)
+        val prefixSegments = lockedPrefixSegments()
+        val prefixEnd = lockedPrefixEnd()
+        val tailReading = draft.input.readingInput.substring(prefixEnd.coerceIn(0, draft.input.readingInput.length))
+        val tailSegments = buildTailSegments(result, tailReading, prefixEnd)
+
+        draft = draft.copy(segments = prefixSegments + tailSegments, selection = Selection.None)
 
         return preeditText()
     }
@@ -148,18 +173,17 @@ class RomaFlowEngine internal constructor(
     fun preeditText(): String {
         val builder = StringBuilder()
 
-        for (segment in draft.segments) {
+        for (segment in displayProjection()) {
             builder.append(segment.surface)
         }
 
-        builder.append(unconvertedTail())
         builder.append(draft.input.pendingRomaji)
 
         return builder.toString()
     }
 
     fun segmentCount(): Int {
-        return displaySegments().size
+        return displayProjection().size
     }
 
     fun segmentText(index: Int): String {
@@ -175,9 +199,158 @@ class RomaFlowEngine internal constructor(
     }
 
     fun selectedSegmentIndex(): Int {
+        return selectedSegmentIndexOrNull() ?: -1
+    }
+
+    /** 選択中の文節の候補数。選択が無い・未変換対象なら 0。 */
+    fun candidateCount(): Int {
+        return currentCandidates().size
+    }
+
+    /** 選択中の文節の [index] 番目の候補文字列。範囲外なら空文字。 */
+    fun candidateText(index: Int): String {
+        return currentCandidates().getOrNull(index).orEmpty()
+    }
+
+    /**
+     * 候補窓で preview 中の候補 [text] を反映し、更新後の preedit を返す。
+     *
+     * draft の segment は破壊せず、selection を [Selection.Candidate] にして display projection 側で
+     * surface を差し替える。選択が文節を指していなければ no-op で現在の preedit を返す。
+     */
+    fun previewCandidate(text: String): String {
+        val segmentIndex = selectedSegmentIndexOrNull()
+
+        if (segmentIndex == null) {
+            return preeditText()
+        }
+
+        draft = draft.copy(selection = Selection.Candidate(segmentIndex, text))
+
+        return preeditText()
+    }
+
+    /**
+     * Enter 確定時に呼ぶ。選択中の文節を確定して prefix lock し、選択解除（カーソル文末）して preedit を返す。
+     *
+     * 確定する候補は、候補窓で preview 中（live preview = ユーザーが見ているハイライト）ならその文字列を優先し、
+     * preview が無い（candidateSelectionChanged が発火しない client 等）ときだけ引数 [text] を使う。候補窓の reload で
+     * IMK の選択 index と確定文字列がズレても、ユーザーが見ている preview と確定内容が一致するようにするための優先順。
+     * commit はせず draft の更新だけ行う。選択が draft.segments の範囲外・None なら no-op。lock 範囲は
+     * 0..max(現在の最大 Locked index, 選択 index) で確定済み prefix を壊さない。確定後の selection は [Selection.None]。
+     */
+    fun confirmCandidate(text: String): String {
+        invalidateCandidateSession()
+
+        val segmentIndex = selectedSegmentIndexOrNull() ?: return preeditText()
+
+        if (segmentIndex !in draft.segments.indices) {
+            return preeditText()
+        }
+
+        val surface = currentPreviewSurfaceOrNull() ?: text
+
+        applyCandidateAndLockPrefix(segmentIndex, surface)
+
+        draft = draft.copy(selection = Selection.None)
+
+        return preeditText()
+    }
+
+    /**
+     * ←/→ で隣文節へ移る直前に呼ぶ。現在の文節を preview（無ければ現 surface）で確定＋prefix lock し、選択 index は維持して preedit を返す。
+     *
+     * azooKey 式に「通った文節まで lock」する。lock 範囲は [confirmCandidate] と同じく 0..max(現在の最大 Locked index, 選択 index) で
+     * 単調増加する。選択が draft.segments の範囲外・None なら no-op。確定後も選択 index を保つため、直後に Swift が moveSelection
+     * すると隣の文節へ移れる。
+     */
+    fun lockSelectedClause(): String {
+        invalidateCandidateSession()
+
+        val segmentIndex = selectedSegmentIndexOrNull() ?: return preeditText()
+
+        if (segmentIndex !in draft.segments.indices) {
+            return preeditText()
+        }
+
+        val surface = clauseSurfaceToLock(segmentIndex)
+
+        applyCandidateAndLockPrefix(segmentIndex, surface)
+
+        draft = draft.copy(selection = Selection.Word(segmentIndex))
+
+        return preeditText()
+    }
+
+    /**
+     * 候補窓を閉じ、preview を破棄して [Selection.Word] へ戻し preedit を返す。
+     *
+     * [Selection.Candidate] 中のみ Word に戻す（surface は projection で元へ戻る）。それ以外は据え置く。
+     */
+    fun closeCandidates(): String {
+        invalidateCandidateSession()
+
         val selection = draft.selection
 
-        return if (selection is Selection.Word) selection.index else -1
+        if (selection is Selection.Candidate) {
+            draft = draft.copy(selection = Selection.Word(selection.segmentIndex))
+        }
+
+        return preeditText()
+    }
+
+    /**
+     * 選択中の文節について call2（LLM 単語候補）を provider へ要求し、生の JSON 文字列を返す。
+     *
+     * 選択が draft.segments の範囲内（変換済 / lock 済の実 segment）でなければ no-op で空文字を返す。
+     * 発行時の [candidateRequestId] を [pendingCandidateRequestId] に記録し、結果適用時の stale 判定に使う。
+     * パース・正規化・自明候補とのマージは [applyWordCandidates] が担うため、ここでは生の戻り値をそのまま返す。
+     * provider は失敗時に空文字を返す契約なので、追加の try/catch は行わない。
+     */
+    suspend fun requestWordCandidates(): String {
+        val segmentIndex = selectedSegmentIndexOrNull()
+        val isInRange = segmentIndex != null && segmentIndex in draft.segments.indices
+
+        if (!isInRange) {
+            return ""
+        }
+
+        pendingCandidateRequestId = candidateRequestId
+
+        val segment = draft.segments[requireNotNull(segmentIndex)]
+        val request = WordCandidateRequest(segment.reading, convertedContext())
+
+        return conversionProvider.candidates(request)
+    }
+
+    /**
+     * call2 の生 JSON [result] をパース・正規化し、選択中の文節の候補 [Segment.candidates] へ格納して preedit を返す。
+     *
+     * 発行時から [candidateRequestId] が変わっていれば（窓を閉じた・別 segment へ移った・入力が変わった等）
+     * stale として no-op。選択が範囲外・[result] が空・パース失敗の場合も no-op で現在の preedit を返す。
+     * 格納する候補は制御文字を除去し trim・空除外・重複除外した上で、[candidateCount] / [candidateText] が
+     * 自明候補とマージして表示する。
+     */
+    fun applyWordCandidates(result: String): String {
+        val isStale = candidateRequestId != pendingCandidateRequestId
+
+        if (isStale) {
+            return preeditText()
+        }
+
+        val segmentIndex = selectedSegmentIndexOrNull()
+        val isInRange = segmentIndex != null && segmentIndex in draft.segments.indices
+
+        if (!isInRange || result.isEmpty()) {
+            return preeditText()
+        }
+
+        val parsed = parseCandidates(result) ?: return preeditText()
+        val normalized = normalizeCandidates(parsed)
+
+        storeCandidates(requireNotNull(segmentIndex), normalized)
+
+        return preeditText()
     }
 
     fun hasComposition(): Boolean {
@@ -205,7 +378,7 @@ class RomaFlowEngine internal constructor(
     }
 
     private fun deleteFromTargetSegment() {
-        val display = displaySegments()
+        val display = displayProjection()
 
         if (display.isEmpty()) {
             return
@@ -265,7 +438,7 @@ class RomaFlowEngine internal constructor(
 
         updated[targetIndex] = reverted
 
-        draft = draft.copy(segments = updated)
+        draft = draft.copy(segments = enforceLeadingLockedPrefix(updated))
     }
 
     private fun deleteSegmentTrailingKana(segment: Segment) {
@@ -346,26 +519,47 @@ class RomaFlowEngine internal constructor(
         return builder.toString()
     }
 
-    private fun buildSegments(result: String): List<Segment> {
+    // tail（Locked prefix を除いた未確定読み）の変換結果を segment 化する。
+    // [readingForAlignment] は tail の読み、[offset] は readingInput 上での tail 開始位置。
+    // align は tail 内の相対 range を返すので、各 range を +offset して readingInput 全体の絶対座標へ直す。
+    // prefix run が空のときは offset=0・readingForAlignment=全文となり従来の全文変換と同一になる。
+    private fun buildTailSegments(
+        result: String,
+        readingForAlignment: String,
+        offset: Int,
+    ): List<Segment> {
         val tokens = segmenter.segment(result)
         val effectiveTokens = tokens.ifEmpty { listOf(SegmentToken(result, result)) }
-        val aligned = aligner.align(draft.input.readingInput, effectiveTokens)
+        val aligned = aligner.align(readingForAlignment, effectiveTokens)
 
-        return aligned.map(::toConvertedSegment)
+        return aligned.map { toConvertedSegment(it, offset) }
     }
 
-    private fun toConvertedSegment(aligned: AlignedSegment): Segment {
+    private fun toConvertedSegment(aligned: AlignedSegment, offset: Int): Segment {
         return Segment(
             surface = aligned.token.surface,
             reading = aligned.token.reading,
-            range = aligned.range,
+            range = offsetRange(aligned.range, offset),
             status = SegmentStatus.Converted,
             candidates = emptyList(),
         )
     }
 
+    private fun offsetRange(range: TextRange, offset: Int): TextRange {
+        if (offset == 0) {
+            return range
+        }
+
+        return range.copy(
+            startInclusive = range.startInclusive + offset,
+            endExclusive = range.endExclusive + offset,
+        )
+    }
+
     private fun moveSelection(forward: Boolean) {
-        val count = displaySegments().size
+        invalidateCandidateSession()
+
+        val count = displayProjection().size
 
         if (count == 0) {
             return
@@ -392,6 +586,184 @@ class RomaFlowEngine internal constructor(
         return if (next > count - 1) Selection.None else Selection.Word(next)
     }
 
+    // Word / Candidate のどちらでも選択中の segment index を返す（B1c ハイライトを Candidate 中も継続させる）。
+    private fun selectedSegmentIndexOrNull(): Int? {
+        return when (val selection = draft.selection) {
+            is Selection.Word -> selection.index
+            is Selection.Candidate -> selection.segmentIndex
+            Selection.None -> null
+        }
+    }
+
+    // ←/→ 直前の lock で確定する surface を決める。preview 中（Candidate）かつ previewSurface 非空ならその候補、
+    // そうでなければ現 surface を維持する。
+    private fun clauseSurfaceToLock(segmentIndex: Int): String {
+        return currentPreviewSurfaceOrNull() ?: draft.segments[segmentIndex].surface
+    }
+
+    // 候補窓で現在 preview 中の候補文字列。Candidate 選択かつ非空のときだけ返す（live preview = ユーザーが見ているハイライト）。
+    private fun currentPreviewSurfaceOrNull(): String? {
+        val selection = draft.selection
+        val hasPreview = selection is Selection.Candidate && selection.previewSurface.isNotEmpty()
+
+        if (!hasPreview) {
+            return null
+        }
+
+        return (selection as Selection.Candidate).previewSurface
+    }
+
+    // 選択中の文節へ候補 surface を適用し、0..max(現在の最大 Locked index, 選択 index) を Locked にする。
+    private fun applyCandidateAndLockPrefix(segmentIndex: Int, text: String) {
+        val maxLockedIndex = draft.segments.indexOfLast { it.status == SegmentStatus.Locked }
+        val lockEnd = maxOf(maxLockedIndex, segmentIndex)
+        val updated = draft.segments.mapIndexed { index, segment ->
+            lockSegmentIfWithinPrefix(segment, index, segmentIndex, text, lockEnd)
+        }
+
+        draft = draft.copy(segments = updated)
+    }
+
+    private fun lockSegmentIfWithinPrefix(
+        segment: Segment,
+        index: Int,
+        targetIndex: Int,
+        text: String,
+        lockEnd: Int,
+    ): Segment {
+        val surface = if (index == targetIndex) text else segment.surface
+        val status = if (index <= lockEnd) SegmentStatus.Locked else segment.status
+
+        return segment.copy(surface = surface, status = status)
+    }
+
+    // 「Locked は常に先頭連続 prefix（0..k）」の不変条件を回復する。先頭から最初の非 Locked 以降に残る Locked を
+    // Converted へ降格し（surface/reading/range/candidates は保持）、孤立 Locked が再変換から除外されるのを防ぐ。
+    // 中間 segment の per-segment revert で prefix が分断され得る経路でのみ呼ぶ。
+    private fun enforceLeadingLockedPrefix(segments: List<Segment>): List<Segment> {
+        val firstGap = segments.indexOfFirst { it.status != SegmentStatus.Locked }
+
+        if (firstGap < 0) {
+            return segments
+        }
+
+        return segments.mapIndexed { index, segment ->
+            demoteOrphanedLock(segment, index, firstGap)
+        }
+    }
+
+    private fun demoteOrphanedLock(segment: Segment, index: Int, firstGap: Int): Segment {
+        val isOrphanedLock = index > firstGap && segment.status == SegmentStatus.Locked
+
+        if (!isOrphanedLock) {
+            return segment
+        }
+
+        return segment.copy(status = SegmentStatus.Converted)
+    }
+
+    // 先頭から連続する Locked segment（prefix run）。Option A で lock は常に左から育つので 0..k の連続列になる。
+    private fun lockedPrefixSegments(): List<Segment> {
+        return draft.segments.takeWhile { it.status == SegmentStatus.Locked }
+    }
+
+    // prefix run が readingInput 上でカバーする末尾位置。空なら 0、各 range の最大 endExclusive を採る（null は無視）。
+    private fun lockedPrefixEnd(): Int {
+        val prefix = lockedPrefixSegments()
+
+        if (prefix.isEmpty()) {
+            return 0
+        }
+
+        return prefix.maxOfOrNull { it.range?.endExclusive ?: 0 } ?: 0
+    }
+
+    // prefix run の surface 連結。再変換時に provider へ渡す前方文脈になる。
+    private fun lockedPrefixContext(): String {
+        val builder = StringBuilder()
+
+        for (segment in lockedPrefixSegments()) {
+            builder.append(segment.surface)
+        }
+
+        return builder.toString()
+    }
+
+    // 選択中の文節に対する候補列（自明候補 + LLM 候補）。未選択 / 未変換対象なら空。
+    private fun currentCandidates(): List<String> {
+        val segmentIndex = selectedSegmentIndexOrNull() ?: return emptyList()
+        val segment = draft.segments.getOrNull(segmentIndex) ?: return emptyList()
+
+        if (segment.status == SegmentStatus.Unconverted) {
+            return emptyList()
+        }
+
+        val merged = obviousCandidates(segment) + segment.candidates
+
+        return merged.filter { it.isNotEmpty() }.distinct()
+    }
+
+    // call2 の文脈に渡す変換済み全文。preview は反映せず draft.segments の実 surface を連結する。
+    private fun convertedContext(): String {
+        val builder = StringBuilder()
+
+        for (segment in draft.segments) {
+            builder.append(segment.surface)
+        }
+
+        return builder.toString()
+    }
+
+    // 生 JSON から候補列を取り出す。空・パース失敗は null（呼び出し側で据え置き）。throw しない。
+    private fun parseCandidates(result: String): List<String>? {
+        val parsed = runCatching { candidateJson.decodeFromString<WordCandidatePayload>(result) }
+
+        return parsed.getOrNull()?.candidates
+    }
+
+    // 制御文字（CR/LF/tab 等）を除去 → trim → 空除外 → 重複除外する。
+    private fun normalizeCandidates(candidates: List<String>): List<String> {
+        return candidates.map(::stripControlChars)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+    }
+
+    private fun stripControlChars(candidate: String): String {
+        return candidate.filterNot { it.isISOControl() }
+    }
+
+    // 正規化済み LLM 候補を選択 segment の candidates へ格納する（自明候補とのマージは currentCandidates が担う）。
+    private fun storeCandidates(segmentIndex: Int, candidates: List<String>) {
+        val updated = draft.segments.toMutableList()
+
+        updated[segmentIndex] = updated[segmentIndex].copy(candidates = candidates)
+
+        draft = draft.copy(segments = updated)
+    }
+
+    // 元文節から決定的に作る自明候補: surface（漢字等） / reading（ひらがな） / reading のカタカナ化。重複・空は後段で除外。
+    private fun obviousCandidates(segment: Segment): List<String> {
+        return listOf(segment.surface, segment.reading, toKatakana(segment.reading))
+    }
+
+    // ひらがな（U+3041..U+3096）を +0x60 でカタカナへ決定的に写像する。長音符など範囲外はそのまま残す。
+    private fun toKatakana(reading: String): String {
+        val builder = StringBuilder(reading.length)
+
+        for (character in reading) {
+            builder.append(katakanaOf(character))
+        }
+
+        return builder.toString()
+    }
+
+    private fun katakanaOf(character: Char): Char {
+        val isHiragana = character.code in HIRAGANA_START..HIRAGANA_END
+
+        return if (isHiragana) character + KATAKANA_OFFSET else character
+    }
+
     private fun clampSelection(selection: Selection, displayCount: Int): Selection {
         if (selection !is Selection.Word) {
             return selection
@@ -404,18 +776,44 @@ class RomaFlowEngine internal constructor(
         return Selection.Word(selection.index.coerceIn(0, displayCount - 1))
     }
 
-    private fun displaySegments(): List<Segment> {
+    // preedit / segmentText / 選択ハイライトを導出する唯一の表示用 segment 列。
+    // candidate preview を反映した base segments に、末尾の未変換 tail を 1 つ足して構成する。
+    // preedit も segmentText もこの projection から導出するため「Σ segmentText == preedit（pendingRomaji 除く）」が常に成立する。
+    private fun displayProjection(): List<Segment> {
+        val baseSegments = projectedBaseSegments()
         val tail = unconvertedTail()
 
         if (tail.isEmpty()) {
-            return draft.segments
+            return baseSegments
         }
 
         val start = convertedEnd()
         val tailRange = TextRange(start, draft.input.readingInput.length, EXACT_MATCH_CONFIDENCE)
         val tailSegment = Segment(tail, tail, tailRange, SegmentStatus.Unconverted, emptyList())
 
-        return draft.segments + tailSegment
+        return baseSegments + tailSegment
+    }
+
+    // candidate preview 中なら選択 segment の surface だけを previewSurface に差し替えた segments を返す。
+    // reading / range / status は元のまま保ち、draft は破壊しない（preview の非破壊性）。
+    private fun projectedBaseSegments(): List<Segment> {
+        val selection = draft.selection
+
+        if (selection !is Selection.Candidate || selection.previewSurface.isEmpty()) {
+            return draft.segments
+        }
+
+        val targetIndex = selection.segmentIndex
+
+        if (targetIndex !in draft.segments.indices) {
+            return draft.segments
+        }
+
+        val projected = draft.segments.toMutableList()
+
+        projected[targetIndex] = projected[targetIndex].copy(surface = selection.previewSurface)
+
+        return projected
     }
 
     private fun displaySegmentCountFor(segments: List<Segment>, readingInput: String): Int {
@@ -426,7 +824,7 @@ class RomaFlowEngine internal constructor(
     }
 
     private fun segmentAt(index: Int): Segment? {
-        return displaySegments().getOrNull(index)
+        return displayProjection().getOrNull(index)
     }
 
     private fun unconvertedTail(): String {
@@ -451,6 +849,13 @@ class RomaFlowEngine internal constructor(
 
     private fun markInputChanged() {
         inputRevision++
+
+        invalidateCandidateSession()
+    }
+
+    // 候補窓セッションを無効化し、進行中の call2 結果を stale として破棄させる（Finding B）。
+    private fun invalidateCandidateSession() {
+        candidateRequestId++
     }
 
     private fun clearState() {
@@ -458,7 +863,19 @@ class RomaFlowEngine internal constructor(
     }
 
     private companion object {
+        /** call2 の生 JSON を寛容にパースする Json。未知キーは無視する。 */
+        val candidateJson = Json { ignoreUnknownKeys = true }
+
         /** per-segment revert を許可する confidence の下限（完全一致）。 */
         const val EXACT_MATCH_CONFIDENCE = 1f
+
+        /** ひらがなブロック先頭（U+3041 ぁ）。カタカナ化の写像範囲の下限。 */
+        const val HIRAGANA_START = 0x3041
+
+        /** ひらがなブロック末尾（U+3096 ゖ）。カタカナ化の写像範囲の上限。 */
+        const val HIRAGANA_END = 0x3096
+
+        /** ひらがな→カタカナの code point オフセット（U+3041→U+30A1）。 */
+        const val KATAKANA_OFFSET = 0x60
     }
 }

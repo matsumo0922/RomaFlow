@@ -150,6 +150,36 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun convert_sendsEmptyPrefixContextAndFullReadingWhenNoLock() = runTest {
+        val recording = RecordingConversionProvider()
+        val engine = RomaFlowEngine(recording, FakeSegmenter(), FakeAligner())
+        engine.inputRomaji("nihongo")
+
+        engine.convert()
+
+        val request = requireNotNull(recording.lastRequest)
+        assertEquals("にほんご", request.readingInput)
+        assertEquals("", request.prefixContext)
+    }
+
+    @Test
+    fun fakeProvider_candidatesAreDeterministicForKnownReading() = runTest {
+        val provider = FakeConversionProvider()
+
+        val candidatesJson = provider.candidates(WordCandidateRequest(reading = "てんき", context = ""))
+
+        assertEquals("""{"candidates":["天気","転機","てんき","テンキ"]}""", candidatesJson)
+    }
+
+    @Test
+    fun fakeProvider_candidatesAreEmptyForUnknownReading() = runTest {
+        val provider = FakeConversionProvider()
+
+        assertEquals("", provider.candidates(WordCandidateRequest(reading = "ぬるぽ", context = "")))
+        assertEquals("", provider.candidates(WordCandidateRequest(reading = "  ", context = "")))
+    }
+
+    @Test
     fun applyConversion_ignoresEmptyResultAndStaysUnconverted() {
         val engine = newEngine()
         engine.inputRomaji("nihongo")
@@ -370,6 +400,444 @@ class RomaFlowEngineTest {
 
         assertEquals(-1, engine.selectedSegmentIndex())
     }
+
+    @Test
+    fun candidates_listsObviousCandidatesForSelectedSegment() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // 先頭 segment（私 / 読み わたし）を ← 2 回で選択 → 自明候補 [私, わたし, ワタシ]。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+
+        assertEquals(3, engine.candidateCount())
+        assertEquals("私", engine.candidateText(0))
+        assertEquals("わたし", engine.candidateText(1))
+        assertEquals("ワタシ", engine.candidateText(2))
+    }
+
+    @Test
+    fun previewCandidate_keepsProjectionInvariantWhenLonger() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気=2 字）を選択し、より長い候補（てんき=3 字）を preview する。
+        engine.moveSelectionLeft()
+        val preedit = engine.previewCandidate("てんき")
+
+        assertEquals("私てんき", preedit)
+        assertEquals("私", engine.segmentText(0))
+        assertEquals("てんき", engine.segmentText(1))
+        assertEquals(1, engine.selectedSegmentIndex())
+        assertEquals(engine.preeditText(), concatSegments(engine))
+    }
+
+    @Test
+    fun previewCandidate_keepsProjectionInvariantWhenShorter() = runTest {
+        // 2 字 surface（天気）に 1 字の preview を当てても Σ segmentText == preedit が成立する。
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        engine.moveSelectionLeft()
+        val preedit = engine.previewCandidate("気")
+
+        assertEquals("私気", preedit)
+        assertEquals("気", engine.segmentText(1))
+        assertEquals(engine.preeditText(), concatSegments(engine))
+    }
+
+    @Test
+    fun previewCandidate_doesNotMutateDraftAndIsRevertedByClose() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        engine.previewCandidate("てんき")
+
+        // closeCandidates で preview を破棄すると surface も status も元へ戻る。
+        val preedit = engine.closeCandidates()
+
+        assertEquals("私天気", preedit)
+        assertEquals("天気", engine.segmentText(1))
+        assertEquals("Converted", engine.segmentStatus(1))
+        assertEquals(1, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun confirmCandidate_appliesSurfaceAndPrefixLocks() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を選択し別候補（転機）で確定 → 0..1 を prefix lock する。
+        engine.moveSelectionLeft()
+        val preedit = engine.confirmCandidate("転機")
+
+        assertEquals("私転機", preedit)
+        assertEquals("転機", engine.segmentText(1))
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("Locked", engine.segmentStatus(1))
+        // ③ Enter 確定後は選択解除（カーソル文末）になる。
+        assertEquals(-1, engine.selectedSegmentIndex())
+        assertTrue(engine.isConverted())
+        assertTrue(engine.hasComposition())
+    }
+
+    @Test
+    fun confirmCandidate_prefersLivePreviewOverPassedText() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を選択し live preview で「転機」を表示中（candidateSelectionChanged 相当）。
+        engine.moveSelectionLeft()
+        engine.previewCandidate("転機")
+
+        // 候補窓の reload で IMK の選択 index がズレ、candidateSelected が別文字列「テンキ」を渡しても、
+        // ユーザーが見ている preview「転機」を優先して確定する（ハイライトと確定の不一致を防ぐ）。
+        val preedit = engine.confirmCandidate("テンキ")
+
+        assertEquals("私転機", preedit)
+        assertEquals("転機", engine.segmentText(1))
+        assertEquals("Locked", engine.segmentStatus(1))
+        assertEquals(-1, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun confirmCandidate_keepsExistingPrefixWhenReselectingEarlierSegment() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // まず segment 1 を確定して 0..1 を lock（③で確定後 selection は None）。
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("転機")
+
+        // None から segment 0 を選び直して確定（N<K）→ prefix 0..max(1,0)=0..1 を維持し surface だけ差し替える。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("渡し")
+
+        assertEquals("渡し", engine.segmentText(0))
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("Locked", engine.segmentStatus(1))
+        // 再確定後も selection は None（カーソル文末）。
+        assertEquals(-1, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun lockSelectedClause_confirmsPreviewAndKeepsSelectionIndex() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を選択し別候補（転機）を preview したまま ←/→ 直前の lock を呼ぶ。
+        engine.moveSelectionLeft()
+        engine.previewCandidate("転機")
+        val preedit = engine.lockSelectedClause()
+
+        // preview が確定され、0..1 が prefix lock、選択 index は維持される。
+        assertEquals("私転機", preedit)
+        assertEquals("転機", engine.segmentText(1))
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("Locked", engine.segmentStatus(1))
+        assertEquals(1, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun lockSelectedClause_withoutPreviewLocksCurrentSurface() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 0（私）を Word 選択（preview せず）→ 現 surface のまま lock。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        val preedit = engine.lockSelectedClause()
+
+        assertEquals("私天気", preedit)
+        assertEquals("私", engine.segmentText(0))
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals(0, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun lockSelectedClause_keepsPreviewWhenNavigatingToAdjacentClause() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を preview→lock してから ← で隣（segment 0）へ移る。
+        engine.moveSelectionLeft()
+        engine.previewCandidate("転機")
+        engine.lockSelectedClause()
+        engine.moveSelectionLeft()
+
+        // ① preview が破棄されず確定済みとして残り、現在の選択は segment 0。
+        assertEquals("転機", engine.segmentText(1))
+        assertEquals("Locked", engine.segmentStatus(1))
+        assertEquals(0, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun lockSelectedClause_isNoOpWhenNoSegmentSelected() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // 選択 None では lock 対象が無いので現 preedit を返して据え置く。
+        assertEquals("私天気", engine.lockSelectedClause())
+        assertEquals("Converted", engine.segmentStatus(0))
+        assertEquals("Converted", engine.segmentStatus(1))
+        assertEquals(-1, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun selectedSegmentIndex_reflectsCandidatePreviewSelection() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        engine.previewCandidate("てんき")
+
+        // Candidate 中も B1c ハイライト継続のため selectedSegmentIndex は選択 index を返す。
+        assertEquals(1, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun requestAndApplyWordCandidates_mergesLlmCandidatesWithObvious() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気 / 読み てんき）を選択して call2 を発火・適用する。
+        engine.moveSelectionLeft()
+        val raw = engine.requestWordCandidates()
+        engine.applyWordCandidates(raw)
+
+        // 自明 [天気, てんき, テンキ] + LLM [天気, 転機, てんき, テンキ] の重複除外後は 4 件。
+        assertEquals(4, engine.candidateCount())
+        assertTrue(candidateList(engine).contains("転機"))
+    }
+
+    @Test
+    fun applyWordCandidates_normalizesControlCharsAndDropsBlanks() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+
+        // stale でない状態（request 経由で id を揃える）で正規化対象の生 JSON を適用する。
+        engine.requestWordCandidates()
+        engine.applyWordCandidates("""{"candidates":["転\n機","","気\t団","転機"]}""")
+
+        val candidates = candidateList(engine)
+
+        // 制御文字（改行・tab）除去後の候補が入り、空候補は除外、重複「転機」は 1 件に畳まれる。
+        assertTrue(candidates.contains("転機"))
+        assertTrue(candidates.contains("気団"))
+        assertFalse(candidates.contains(""))
+        assertEquals(1, candidates.count { it == "転機" })
+    }
+
+    @Test
+    fun applyWordCandidates_isNoOpWhenSessionClosedAfterRequest() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        val raw = engine.requestWordCandidates()
+
+        // 窓を閉じた後に古い結果が返っても LLM 候補を復活させない（stale guard）。
+        engine.closeCandidates()
+        val countAfterClose = engine.candidateCount()
+        engine.applyWordCandidates(raw)
+
+        assertEquals(countAfterClose, engine.candidateCount())
+        assertFalse(candidateList(engine).contains("転機"))
+    }
+
+    @Test
+    fun applyWordCandidates_isNoOpAfterConfirm() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        val raw = engine.requestWordCandidates()
+
+        // confirm 後に古い結果が返っても確定後の状態を書き換えない（stale guard）。
+        engine.confirmCandidate("転機")
+        engine.applyWordCandidates(raw)
+
+        assertEquals("転機", engine.segmentText(1))
+        assertEquals("Locked", engine.segmentStatus(1))
+    }
+
+    @Test
+    fun applyWordCandidates_isNoOpAfterSelectionMoved() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        val raw = engine.requestWordCandidates()
+
+        // 選択が動いたら古い結果は別 segment に乗らず破棄される（stale guard）。
+        engine.moveSelectionLeft()
+        engine.applyWordCandidates(raw)
+
+        assertFalse(candidateList(engine).contains("転機"))
+    }
+
+    @Test
+    fun requestWordCandidates_returnsEmptyWhenNoSegmentSelected() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // 選択 None では call2 を発火しない。
+        assertEquals("", engine.requestWordCandidates())
+    }
+
+    @Test
+    fun reconvert_preservesLockedPrefixAndReconvertsOnlyTail() = runTest {
+        val engine = newEngine(RECONVERT_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 0（私）を選択して別候補（渡し）で確定 → 0..0 を prefix lock。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("渡し")
+
+        // 再変換すると Locked prefix（渡し）は保持し、tail（てんき）だけ再変換される。
+        engine.convertAndApply()
+
+        assertEquals("渡し", engine.segmentText(0))
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("天気", engine.segmentText(1))
+        assertEquals("Converted", engine.segmentStatus(1))
+        assertEquals("渡し天気", engine.preeditText())
+    }
+
+    @Test
+    fun reconvert_sendsTailReadingAndLockedPrefixContextToProvider() = runTest {
+        val recording = RecordingConversionProvider()
+        val engine = RomaFlowEngine(recording, RECONVERT_SEGMENTER, FakeAligner())
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 0 を渡しで確定（0..0 Locked）してから 2 回目の変換を発火する。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("渡し")
+        engine.convert()
+
+        val request = requireNotNull(recording.lastRequest)
+        assertEquals("てんき", request.readingInput)
+        assertEquals("渡し", request.prefixContext)
+    }
+
+    @Test
+    fun reconvert_offsetsTailSegmentRangeByPrefixEnd() = runTest {
+        val engine = newEngine(RECONVERT_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("渡し")
+        engine.convertAndApply()
+
+        // tail segment（天気）の読みは元のまま・range は prefixEnd(=3) 分オフセットされる。
+        // exact backspace で tail だけが読み（てんき）へ戻り、prefix（渡し）は保持される。
+        assertEquals("てんき", engine.segmentReading(1))
+        assertEquals("渡してんき", engine.deleteBackward())
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("Unconverted", engine.segmentStatus(1))
+    }
+
+    @Test
+    fun deleteBackward_demotesOrphanedLockedSegmentsToConverted() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を確定して 0..1 を Locked にする（③で確定後 selection は None）。
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("転機")
+
+        // None から segment 0 を選び直して per-segment revert すると、prefix の連続性が崩れる。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.deleteBackward()
+
+        // segment 0 は Unconverted へ戻り、孤立した segment 1 は Locked から Converted へ降格する。
+        assertEquals("Unconverted", engine.segmentStatus(0))
+        assertEquals("Converted", engine.segmentStatus(1))
+    }
+
+    @Test
+    fun reconvert_afterOrphanRevertReconvertsWholeInput() = runTest {
+        val recording = RecordingConversionProvider()
+        val engine = RomaFlowEngine(recording, RECONVERT_SEGMENTER, FakeAligner())
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("転機")
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        engine.deleteBackward()
+
+        // 孤立 Locked が無いので lockedPrefix は空＝tail は全文。再変換で全体が再変換対象になる。
+        engine.convert()
+
+        val request = requireNotNull(recording.lastRequest)
+        assertEquals("わたしてんき", request.readingInput)
+        assertEquals("", request.prefixContext)
+    }
+
+    @Test
+    fun reconvert_isNoOpWhenAllSegmentsLocked() = runTest {
+        val engine = newEngine(RECONVERT_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を確定 → 0..1 全 Locked。
+        engine.moveSelectionLeft()
+        engine.confirmCandidate("天気")
+
+        // tail が空なので convert は何もせず空文字を返し、apply 後も両 segment が Locked のまま。
+        assertEquals("", engine.convert())
+        engine.applyConversion("")
+
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("Locked", engine.segmentStatus(1))
+        assertEquals("私天気", engine.preeditText())
+    }
+}
+
+/** 候補窓の現在候補を index 順に取り出す検証用ヘルパー。 */
+private fun candidateList(engine: RomaFlowEngine): List<String> {
+    val candidates = mutableListOf<String>()
+
+    for (index in 0 until engine.candidateCount()) {
+        candidates.add(engine.candidateText(index))
+    }
+
+    return candidates
+}
+
+/** preedit 不変条件の検証用に、engine の全 segment surface を連結する。 */
+private fun concatSegments(engine: RomaFlowEngine): String {
+    val builder = StringBuilder()
+
+    for (index in 0 until engine.segmentCount()) {
+        builder.append(engine.segmentText(index))
+    }
+
+    return builder.toString()
 }
 
 /** 「私天気」を読み付きの 2 token（私=わたし / 天気=てんき）へ分割するテスト用 segmenter。 */
@@ -378,6 +846,26 @@ private val WATASHI_TENKI_SEGMENTER = MappedSegmenter(
         "私天気" to listOf(
             SegmentToken("私", "わたし"),
             SegmentToken("天気", "てんき"),
+        ),
+    ),
+)
+
+/**
+ * lock 再変換テスト用 segmenter。初回変換の全文「私天気」と、tail 再変換で返る「天気」の両方を読み付きで分割する。
+ */
+private val RECONVERT_SEGMENTER = MappedSegmenter(
+    mapOf(
+        "私天気" to listOf(
+            SegmentToken("私", "わたし"),
+            SegmentToken("天気", "てんき"),
+        ),
+        "天気" to listOf(
+            SegmentToken("天気", "てんき"),
+        ),
+        // RecordingConversionProvider は変換せず読みを素通しするため、全文「わたしてんき」も分割対象にする。
+        "わたしてんき" to listOf(
+            SegmentToken("わたし", "わたし"),
+            SegmentToken("てんき", "てんき"),
         ),
     ),
 )
@@ -392,6 +880,23 @@ private suspend fun RomaFlowEngine.convertAndApply(): String {
     val result = convert()
 
     return applyConversion(result)
+}
+
+/** convert() に渡された最後の [ConversionRequest] を記録し、変換結果は素通しで返すテスト用 provider。 */
+private class RecordingConversionProvider : ConversionProvider {
+
+    var lastRequest: ConversionRequest? = null
+        private set
+
+    override suspend fun convert(request: ConversionRequest): String {
+        lastRequest = request
+
+        return request.readingInput
+    }
+
+    override suspend fun candidates(request: WordCandidateRequest): String {
+        return ""
+    }
 }
 
 /** 既知の変換結果を読み付き token 列へ分割し、未登録の入力は 1 文字 1 token にフォールバックする segmenter。 */

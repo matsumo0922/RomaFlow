@@ -1,10 +1,12 @@
 package me.matsumo.romaflow.core.ime
 
+import kotlinx.serialization.json.Json
+
 /**
  * 決定的な rule-based の [ConversionProvider] スタブ。
  *
- * AI を使わず固定の変換表で既知のかな語を漢字へ置換し、表にない部分はかなのまま残す。
- * テスト・開発用で、同じ入力には常に同じ結果を返す。
+ * AI を使わず固定の変換表で既知のかな語を漢字へ置換し、表にない部分はかなのまま残す。候補列挙（call2）も
+ * 固定の候補表から決定的に返す。テスト・開発用で、同じ入力には常に同じ結果を返す。
  */
 internal class FakeConversionProvider : ConversionProvider {
 
@@ -16,6 +18,18 @@ internal class FakeConversionProvider : ConversionProvider {
         }
 
         return converted
+    }
+
+    override suspend fun candidates(request: WordCandidateRequest): String {
+        val reading = request.reading
+
+        if (reading.isBlank()) {
+            return ""
+        }
+
+        val candidates = CANDIDATE_TABLE[reading] ?: return ""
+
+        return Json.encodeToString(WordCandidatePayload(candidates))
     }
 
     private companion object {
@@ -31,6 +45,18 @@ internal class FakeConversionProvider : ConversionProvider {
             "かんじ" to "漢字",
             "わたし" to "私",
             "てんき" to "天気",
+        )
+
+        /**
+         * 読みと候補列の対応表。
+         *
+         * call2 の決定的スタブ用。[CONVERSION_TABLE] と整合する漢字を先頭に、同音異義語・ひらがな・カタカナを
+         * 並べる。表にない読みは候補なし（空文字）とする。
+         */
+        val CANDIDATE_TABLE = mapOf(
+            "てんき" to listOf("天気", "転機", "てんき", "テンキ"),
+            "かんじ" to listOf("漢字", "幹事", "かんじ", "カンジ"),
+            "わたし" to listOf("私", "わたし", "ワタシ"),
         )
     }
 }
