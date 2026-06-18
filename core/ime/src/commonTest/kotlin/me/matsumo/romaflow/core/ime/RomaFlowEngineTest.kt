@@ -1,6 +1,7 @@
 package me.matsumo.romaflow.core.ime
 
 import kotlinx.coroutines.test.runTest
+import me.matsumo.romaflow.core.morphology.HomophoneDictionary
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -702,6 +703,77 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun candidates_insertsDictionaryCandidatesBetweenObviousAndLlm() = runTest {
+        // 辞書だけが供給する固有候補（転記）が自明と LLM の間に正しく挟まる。
+        val dictionary = FakeHomophoneDictionary(
+            mapOf(
+                "てんき" to listOf("転記", "天機"),
+            ),
+        )
+        val engine = RomaFlowEngine(
+            FakeConversionProvider(),
+            WATASHI_TENKI_SEGMENTER,
+            FakeAligner(),
+            dictionary,
+        )
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気 / 読み てんき）を選択して call2 を発火・適用する。
+        engine.moveSelectionLeft()
+        engine.applyWordCandidates(engine.requestWordCandidates())
+
+        // 並び順は 自明[天気, てんき, テンキ] → 辞書[転記, 天機] → LLM[天気, 転機, てんき, テンキ] の distinct 後。
+        assertEquals(
+            listOf("天気", "てんき", "テンキ", "転記", "天機", "転機"),
+            candidateList(engine),
+        )
+    }
+
+    @Test
+    fun candidates_foldsDuplicateDictionaryCandidatesWithDistinct() = runTest {
+        // 辞書候補が自明（天気）と LLM（転機）の両方と重複しても distinct で 1 件に畳まれる。
+        val dictionary = FakeHomophoneDictionary(
+            mapOf(
+                "てんき" to listOf("天気", "転機", "転記"),
+            ),
+        )
+        val engine = RomaFlowEngine(
+            FakeConversionProvider(),
+            WATASHI_TENKI_SEGMENTER,
+            FakeAligner(),
+            dictionary,
+        )
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        engine.moveSelectionLeft()
+        engine.applyWordCandidates(engine.requestWordCandidates())
+
+        val candidates = candidateList(engine)
+
+        assertEquals(1, candidates.count { it == "天気" })
+        assertEquals(1, candidates.count { it == "転機" })
+        assertEquals(1, candidates.count { it == "転記" })
+    }
+
+    @Test
+    fun candidates_emptyDictionaryKeepsObviousOnly() = runTest {
+        // 既定の EmptyHomophoneDictionary では辞書候補が挟まらず自明候補のみになる（従来挙動）。
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+
+        assertEquals(
+            listOf("私", "わたし", "ワタシ"),
+            candidateList(engine),
+        )
+    }
+
+    @Test
     fun reconvert_preservesLockedPrefixAndReconvertsOnlyTail() = runTest {
         val engine = newEngine(RECONVERT_SEGMENTER)
         engine.inputRomaji("watashitenki")
@@ -904,5 +976,13 @@ private class MappedSegmenter(private val table: Map<String, List<SegmentToken>>
 
     override fun segment(text: String): List<SegmentToken> {
         return table[text] ?: text.map { SegmentToken(it.toString(), it.toString()) }
+    }
+}
+
+/** 指定した読み（ひらがな）→ 表層候補の固定表を返すテスト用 [HomophoneDictionary]。未登録の読みは空。 */
+private class FakeHomophoneDictionary(private val table: Map<String, List<String>>) : HomophoneDictionary {
+
+    override fun homophoneCandidates(reading: String): List<String> {
+        return table[reading].orEmpty()
     }
 }
