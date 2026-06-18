@@ -480,7 +480,8 @@ class RomaFlowEngineTest {
         assertEquals("転機", engine.segmentText(1))
         assertEquals("Locked", engine.segmentStatus(0))
         assertEquals("Locked", engine.segmentStatus(1))
-        assertEquals(1, engine.selectedSegmentIndex())
+        // ③ Enter 確定後は選択解除（カーソル文末）になる。
+        assertEquals(-1, engine.selectedSegmentIndex())
         assertTrue(engine.isConverted())
         assertTrue(engine.hasComposition())
     }
@@ -491,17 +492,87 @@ class RomaFlowEngineTest {
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
 
-        // まず segment 1 を確定して 0..1 を lock。
+        // まず segment 1 を確定して 0..1 を lock（③で確定後 selection は None）。
         engine.moveSelectionLeft()
         engine.confirmCandidate("転機")
 
-        // segment 0 を選び直して確定（N<K）→ prefix 0..max(1,0)=0..1 を維持し surface だけ差し替える。
+        // None から segment 0 を選び直して確定（N<K）→ prefix 0..max(1,0)=0..1 を維持し surface だけ差し替える。
+        engine.moveSelectionLeft()
         engine.moveSelectionLeft()
         engine.confirmCandidate("渡し")
 
         assertEquals("渡し", engine.segmentText(0))
         assertEquals("Locked", engine.segmentStatus(0))
         assertEquals("Locked", engine.segmentStatus(1))
+        // 再確定後も selection は None（カーソル文末）。
+        assertEquals(-1, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun lockSelectedClause_confirmsPreviewAndKeepsSelectionIndex() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を選択し別候補（転機）を preview したまま ←/→ 直前の lock を呼ぶ。
+        engine.moveSelectionLeft()
+        engine.previewCandidate("転機")
+        val preedit = engine.lockSelectedClause()
+
+        // preview が確定され、0..1 が prefix lock、選択 index は維持される。
+        assertEquals("私転機", preedit)
+        assertEquals("転機", engine.segmentText(1))
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals("Locked", engine.segmentStatus(1))
+        assertEquals(1, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun lockSelectedClause_withoutPreviewLocksCurrentSurface() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 0（私）を Word 選択（preview せず）→ 現 surface のまま lock。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
+        val preedit = engine.lockSelectedClause()
+
+        assertEquals("私天気", preedit)
+        assertEquals("私", engine.segmentText(0))
+        assertEquals("Locked", engine.segmentStatus(0))
+        assertEquals(0, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun lockSelectedClause_keepsPreviewWhenNavigatingToAdjacentClause() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // segment 1（天気）を preview→lock してから ← で隣（segment 0）へ移る。
+        engine.moveSelectionLeft()
+        engine.previewCandidate("転機")
+        engine.lockSelectedClause()
+        engine.moveSelectionLeft()
+
+        // ① preview が破棄されず確定済みとして残り、現在の選択は segment 0。
+        assertEquals("転機", engine.segmentText(1))
+        assertEquals("Locked", engine.segmentStatus(1))
+        assertEquals(0, engine.selectedSegmentIndex())
+    }
+
+    @Test
+    fun lockSelectedClause_isNoOpWhenNoSegmentSelected() = runTest {
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        // 選択 None では lock 対象が無いので現 preedit を返して据え置く。
+        assertEquals("私天気", engine.lockSelectedClause())
+        assertEquals("Converted", engine.segmentStatus(0))
+        assertEquals("Converted", engine.segmentStatus(1))
+        assertEquals(-1, engine.selectedSegmentIndex())
     }
 
     @Test
@@ -673,11 +744,12 @@ class RomaFlowEngineTest {
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
 
-        // segment 1（天気）を確定して 0..1 を Locked にする。
+        // segment 1（天気）を確定して 0..1 を Locked にする（③で確定後 selection は None）。
         engine.moveSelectionLeft()
         engine.confirmCandidate("転機")
 
-        // segment 0 を選び直して per-segment revert すると、prefix の連続性が崩れる。
+        // None から segment 0 を選び直して per-segment revert すると、prefix の連続性が崩れる。
+        engine.moveSelectionLeft()
         engine.moveSelectionLeft()
         engine.deleteBackward()
 
@@ -694,6 +766,7 @@ class RomaFlowEngineTest {
         engine.convertAndApply()
         engine.moveSelectionLeft()
         engine.confirmCandidate("転機")
+        engine.moveSelectionLeft()
         engine.moveSelectionLeft()
         engine.deleteBackward()
 
