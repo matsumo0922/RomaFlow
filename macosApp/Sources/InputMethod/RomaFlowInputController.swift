@@ -136,13 +136,15 @@ final class RomaFlowInputController: IMKInputController {
         return !modifiers.intersection([.command, .control, .option]).isEmpty
     }
 
-    // 修飾なしの数字キー 1〜9（番号付き候補の選択キー）か。0 や修飾付き・複数文字は対象外。
+    // 番号付き候補の選択キー（実際に入力される文字が 1〜9）か。Cmd/Ctrl/Option 付きや、Shift+数字 (= "!" 等
+    // 記号になるもの)・0・複数文字は対象外。charactersIgnoringModifiers だと Shift+1 も "1" と判定され記号入力を
+    // 奪うため、実入力文字 event.characters で判定する。
     private func isUnmodifiedDigitSelectionKey(_ event: NSEvent) -> Bool {
         if hasCommandLikeModifier(event) {
             return false
         }
 
-        guard let characters = event.charactersIgnoringModifiers, characters.count == 1 else {
+        guard let characters = event.characters, characters.count == 1 else {
             return false
         }
 
