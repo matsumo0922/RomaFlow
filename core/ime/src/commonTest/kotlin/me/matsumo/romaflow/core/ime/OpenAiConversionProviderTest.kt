@@ -74,6 +74,58 @@ class OpenAiConversionProviderTest {
     }
 
     @Test
+    fun convert_usesReconversionSystemPromptWhenPrefixContextPresent() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = SUCCESS_RESPONSE_JSON,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
+
+        provider.convert(ConversionRequest(readingInput = "てんき", prefixContext = "今日は良い"))
+
+        val requestBody = requestBodyText(engine.requestHistory.single().body)
+        assertTrue(requestBody.contains("前方文脈は既に確定済み"))
+        assertTrue(requestBody.contains("続きの読み"))
+    }
+
+    @Test
+    fun convert_usesDefaultSystemPromptWhenPrefixContextBlank() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = SUCCESS_RESPONSE_JSON,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
+
+        provider.convert(conversionRequest("にほんご"))
+
+        val requestBody = requestBodyText(engine.requestHistory.single().body)
+        assertTrue(requestBody.contains("かな漢字変換エンジン"))
+        assertFalse(requestBody.contains("前方文脈は既に確定済み"))
+    }
+
+    @Test
+    fun convert_stripsEchoedPrefixContextFromResult() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = ECHOED_PREFIX_RESPONSE_JSON,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
+
+        val converted = provider.convert(ConversionRequest(readingInput = "てんき", prefixContext = "今日は良い"))
+
+        assertEquals("天気", converted)
+    }
+
+    @Test
     fun candidates_returnsRawJsonAndSendsJsonSchemaResponseFormat() = runTest {
         val engine = MockEngine {
             respond(
@@ -128,6 +180,9 @@ class OpenAiConversionProviderTest {
 
         const val CANDIDATES_RESPONSE_JSON =
             """{"choices":[{"message":{"role":"assistant","content":"{\"candidates\":[\"天気\",\"転機\"]}"}}]}"""
+
+        const val ECHOED_PREFIX_RESPONSE_JSON =
+            """{"choices":[{"message":{"role":"assistant","content":"今日は良い天気"}}]}"""
     }
 }
 

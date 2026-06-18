@@ -56,7 +56,21 @@ internal class OpenAiConversionProvider(
             return ""
         }
 
-        return converted.trim()
+        return stripEchoedPrefix(converted, request.prefixContext).trim()
+    }
+
+    // LLM が前方文脈をそのまま echo して返した厳密一致ケースの保険として、結果が prefixContext で
+    // 始まるなら先頭の prefix を 1 回だけ剥がす。prefixContext を一部だけ含む部分 echo は
+    // ここでは防げないため、tail-only を促す再変換 system prompt 側で抑制する前提とする。
+    private fun stripEchoedPrefix(
+        converted: String,
+        prefixContext: String,
+    ): String {
+        if (prefixContext.isBlank()) {
+            return converted
+        }
+
+        return converted.trim().removePrefix(prefixContext)
     }
 
     override suspend fun candidates(request: WordCandidateRequest): String {
@@ -83,10 +97,11 @@ internal class OpenAiConversionProvider(
         prefixContext: String,
     ): String {
         val userContent = buildConversionUserContent(kana, prefixContext)
+        val systemPrompt = selectConversionSystemPrompt(prefixContext)
         val request = ChatCompletionRequest(
             model = config.model,
             messages = listOf(
-                ChatMessage(role = "system", content = SYSTEM_PROMPT),
+                ChatMessage(role = "system", content = systemPrompt),
                 ChatMessage(role = "user", content = userContent),
             ),
             reasoningEffort = REASONING_EFFORT,
@@ -127,6 +142,16 @@ internal class OpenAiConversionProvider(
         val completion = response.body<ChatCompletionResponse>()
 
         return completion.choices.firstOrNull()?.message?.content.orEmpty()
+    }
+
+    // lock 再変換（prefixContext 非空）では前方文脈の echo を禁じる専用 system prompt を使い、
+    // tail だけを変換させる。lock 無しの初回変換（prefixContext 空）は従来の汎用 prompt のまま。
+    private fun selectConversionSystemPrompt(prefixContext: String): String {
+        if (prefixContext.isBlank()) {
+            return SYSTEM_PROMPT
+        }
+
+        return RECONVERSION_SYSTEM_PROMPT
     }
 
     // lock 再変換では先頭の確定済み文節を前方文脈として渡し、tail の読みだけを変換させる。
@@ -193,6 +218,18 @@ internal class OpenAiConversionProvider(
                 "入力された読み（ひらがな・英字混じり）を最も自然な漢字かな交じり文へ変換し、" +
                 "変換結果の文字列のみを出力してください。説明・引用符・前置きは出力しないこと。" +
                 "英単語や記号は変換せずそのまま保持してください。"
+
+        /**
+         * lock 再変換専用の system prompt。前方文脈は確定済みの文脈情報であり、出力へ含めてはいけない。
+         * tail（続きの読み）の変換結果のみを返させ、二重化（前方文脈の再掲）を防ぐ。1-shot 例で tail-only をアンカーする。
+         */
+        const val RECONVERSION_SYSTEM_PROMPT =
+            "あなたは日本語IMEのかな漢字変換エンジンです。" +
+                "前方文脈は既に確定済みの文脈情報であり、絶対に出力へ含めないでください。" +
+                "出力は『続きの読み』を最も自然な漢字かな交じり文へ変換した文字列のみとし、" +
+                "説明・引用符・前置き・前方文脈の再掲を一切しないこと。" +
+                "英単語や記号は変換せずそのまま保持してください。" +
+                "例: 前方文脈『私は』続きの読み『がっこうにいく』→ 出力『学校に行く』（『私は』は出力しない）。"
 
         /** 選択文節の読みに対する同音異義語・別変換候補を、文脈に沿って JSON で列挙させる system prompt。 */
         const val CANDIDATE_SYSTEM_PROMPT =
