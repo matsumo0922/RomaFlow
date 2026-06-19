@@ -128,6 +128,7 @@ wanakana = { module = "io.github.greattusk:wanakana-common", version.ref = "wana
 # Japanese morphology
 momiji-core = { module = "io.github.tokuhirom.momiji:momiji-core", version.ref = "momiji" }
 momiji-ipadic = { module = "io.github.tokuhirom.momiji:momiji-ipadic", version.ref = "momiji" }
+momiji-ipadic-code = { module = "io.github.tokuhirom.momiji:momiji-ipadic-code", version.ref = "momiji" }
 
 # AndroidX
 androidx-core = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }

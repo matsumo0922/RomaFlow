@@ -46,6 +46,15 @@ internal object SysDicParser {
     /** token 内の feature offset（32bit）のオフセット。 */
     private const val TOKEN_FEATURE_OFFSET = 8
 
+    /** token 内の lcAttr（符号なし 16bit）のオフセット。 */
+    private const val TOKEN_LCATTR_OFFSET = 0
+
+    /** token 内の rcAttr（符号なし 16bit）のオフセット。 */
+    private const val TOKEN_RCATTR_OFFSET = 2
+
+    /** token 内の posId（符号なし 16bit）のオフセット。 */
+    private const val TOKEN_POSID_OFFSET = 4
+
     /** 終端値から token 件数を取り出す下位ビットマスク。 */
     private const val TOKEN_COUNT_MASK = 0xFF
 
@@ -282,5 +291,111 @@ internal object SysDicParser {
         val unitOffset = dartsOffset + unitIndex * DARTS_UNIT_SIZE
 
         return reader.readUIntAt(unitOffset + DARTS_CHECK_OFFSET)
+    }
+
+    /**
+     * sys.dic の生バイト [bytes] を解析し、lcAttr / rcAttr / posId を含む全リッチエントリを返す。
+     *
+     * 読み（reading）が空または "*" のエントリは除外する。[parseEntries] の [LexemeEntry] 版。
+     */
+    fun parseRichEntries(bytes: ByteArray): List<LexemeEntry> {
+        val reader = SysDicByteReader(bytes)
+        val layout = readSectionLayout(reader, bytes.size)
+
+        return enumerateRichEntries(reader, layout)
+    }
+
+    private fun enumerateRichEntries(reader: SysDicByteReader, layout: SectionLayout): List<LexemeEntry> {
+        val rootBase = readDartsBase(reader, layout.dartsOffset, 0)
+        val entries = mutableListOf<LexemeEntry>()
+        val stack = ArrayDeque<DfsFrame>()
+
+        stack.addLast(DfsFrame(base = rootBase, surfaceBytes = byteArrayOf()))
+
+        while (stack.isNotEmpty()) {
+            val frame = stack.removeLast()
+
+            visitRichNode(reader, layout, frame, entries, stack)
+        }
+
+        return entries
+    }
+
+    private fun visitRichNode(
+        reader: SysDicByteReader,
+        layout: SectionLayout,
+        frame: DfsFrame,
+        entries: MutableList<LexemeEntry>,
+        stack: ArrayDeque<DfsFrame>,
+    ) {
+        collectRichTerminalEntries(reader, layout, frame, entries)
+        pushChildren(reader, layout, frame, stack)
+    }
+
+    private fun collectRichTerminalEntries(
+        reader: SysDicByteReader,
+        layout: SectionLayout,
+        frame: DfsFrame,
+        entries: MutableList<LexemeEntry>,
+    ) {
+        val terminalIndex = frame.base
+        val isWithinBounds = terminalIndex in 0 until layout.unitCount
+
+        if (!isWithinBounds) {
+            return
+        }
+
+        val terminalCheck = readDartsCheck(reader, layout.dartsOffset, terminalIndex)
+        val terminalBase = readDartsBase(reader, layout.dartsOffset, terminalIndex)
+        val isTerminalNode = terminalCheck == frame.base.toUInt() && terminalBase < 0
+
+        if (!isTerminalNode) {
+            return
+        }
+
+        val value = -terminalBase - 1
+        val tokenCount = value and TOKEN_COUNT_MASK
+        val tokenStartIndex = value shr TOKEN_START_SHIFT
+        val surface = frame.surfaceBytes.decodeToString()
+
+        for (offsetIndex in 0 until tokenCount) {
+            val entry = readRichTokenEntry(reader, layout, surface, tokenStartIndex + offsetIndex)
+
+            if (entry != null) {
+                entries.add(entry)
+            }
+        }
+    }
+
+    private fun readRichTokenEntry(
+        reader: SysDicByteReader,
+        layout: SectionLayout,
+        surface: String,
+        tokenIndex: Int,
+    ): LexemeEntry? {
+        val tokenBase = layout.tokenOffset + tokenIndex * TOKEN_SIZE
+        val lcAttr = reader.readUShortAt(tokenBase + TOKEN_LCATTR_OFFSET)
+        val rcAttr = reader.readUShortAt(tokenBase + TOKEN_RCATTR_OFFSET)
+        val posId = reader.readUShortAt(tokenBase + TOKEN_POSID_OFFSET)
+        val wcost = reader.readShortAt(tokenBase + TOKEN_WCOST_OFFSET)
+        val featurePointer = reader.readUIntAt(tokenBase + TOKEN_FEATURE_OFFSET).toInt()
+
+        val feature = reader.readNullTerminatedString(layout.featureOffset + featurePointer)
+        val reading = feature.split(FEATURE_DELIMITER).getOrNull(FEATURE_INDEX_READING)
+
+        val isUsableReading = reading != null && reading.isNotEmpty() && reading != FEATURE_EMPTY_MARK
+
+        if (!isUsableReading) {
+            return null
+        }
+
+        return LexemeEntry(
+            surface = surface,
+            reading = reading!!,
+            lcAttr = lcAttr,
+            rcAttr = rcAttr,
+            posId = posId,
+            wcost = wcost,
+        )
     }
 }
