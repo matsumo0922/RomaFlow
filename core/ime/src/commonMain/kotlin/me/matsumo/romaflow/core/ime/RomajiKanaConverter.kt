@@ -12,6 +12,9 @@ import dev.esnault.wanakana.core.Wanakana
  * - かな変換は WanaKana の IME モードを使い、`nn`→ん や `n`+子音→ん を日本語 IME と同じ規則で扱う。
  * - 大文字で始まる塊は「英単語」として丸ごと Latin のまま残し、次の空白までを1語とみなす（`Tokyo`→Tokyo）。
  * - 末尾の未確定ローマ字（`k`/`ky`/lone `n` 等）は確定せず pending として残し、確定時のみ かな へ解決する。
+ *
+ * [buildTrace] は atoms 列から [TransliterationTrace] を構築する決定的 transducer。
+ * prefix 再生アプローチにより `n`+子音や `tt`+母音、`kyo` のような直前 pending の解釈変化に対応する。
  */
 internal class RomajiKanaConverter {
 
@@ -46,6 +49,81 @@ internal class RomajiKanaConverter {
         }
 
         return toKana(pendingRomaji, finalizeTrailing = true)
+    }
+
+    /**
+     * [atoms] 列全体を prefix 再生して [TransliterationTrace] を構築する決定的 transducer。
+     *
+     * prefix 再生アプローチ: 全 atoms を順に追加し、追加ごとに committed output の増分を観測する。
+     * committed output が伸びた時点で、直前まで pending だった atoms がエッジを形成したとみなす。
+     *
+     * これにより `n`+子音（`n` は pending → `nb` で `ん`+`b` pending に変化）、`tt`+母音（`tt` pending → `tta` で
+     * `った` committed）、`kyo` 一括（`k` pending → `ky` pending → `kyo` で `きょ` committed）に対応できる。
+     *
+     * ## span 帰属の正確性
+     * committed edge の span 終端は「現在の pending を構成する末尾 atom 数」を引いた位置にする。
+     * 各 atom は text 長 1 文字を前提とし、pendingDisplay.length が pending atom 数に等しい。
+     * 例: `nb` の時点で pendingDisplay="b"(1文字) なので committed `ん` の span 終端 = (0+2) - 1 = 1。
+     * これにより committed span `[0,1)` と pending span `[1,2)` が atoms を隙間なく覆う。
+     */
+    fun buildTrace(atoms: List<InputAtom>): TransliterationTrace {
+        if (atoms.isEmpty()) {
+            return TransliterationTrace.empty()
+        }
+
+        val edges = mutableListOf<TransliterationEdge>()
+        var committedSoFar = ""
+        var edgeStartAtomIndex = 0
+
+        for (atomIndex in atoms.indices) {
+            val currentRomaji = atoms.subList(0, atomIndex + 1).joinToString("") { it.text }
+            val display = toKana(currentRomaji, finalizeTrailing = false)
+            val pendingDisplay = trailingLatinRun(display)
+            val currentCommitted = display.substring(0, display.length - pendingDisplay.length)
+
+            val committedDelta = currentCommitted.removePrefix(committedSoFar)
+            val hasNewCommitted = committedDelta.isNotEmpty()
+
+            if (hasNewCommitted) {
+                // pending を構成する末尾 atom 数（通常 atom=1文字なので pendingDisplay.length と等しい）を
+                // 引いて committed span 終端を求める。これにより trigger atom が committed span に混入しない。
+                val pendingAtomCount = pendingDisplay.length
+                val committedSpanEnd = (atomIndex + 1) - pendingAtomCount
+
+                val committedEdge = TransliterationEdge(
+                    sourceSpan = SourceSpan(fromAtomIndex = edgeStartAtomIndex, toAtomIndex = committedSpanEnd),
+                    reading = committedDelta,
+                    state = TransliterationEdge.EdgeState.Committed,
+                    unit = SourceUnit.Romaji(
+                        atoms = atoms.subList(edgeStartAtomIndex, committedSpanEnd).map { it.id },
+                    ),
+                )
+
+                edges.add(committedEdge)
+
+                committedSoFar = currentCommitted
+                edgeStartAtomIndex = committedSpanEnd
+            }
+        }
+
+        val fullRomaji = atoms.joinToString("") { it.text }
+        val fullDisplay = toKana(fullRomaji, finalizeTrailing = false)
+        val pendingDisplay = trailingLatinRun(fullDisplay)
+
+        if (pendingDisplay.isNotEmpty()) {
+            val pendingEdge = TransliterationEdge(
+                sourceSpan = SourceSpan(fromAtomIndex = edgeStartAtomIndex, toAtomIndex = atoms.size),
+                reading = pendingDisplay,
+                state = TransliterationEdge.EdgeState.Pending,
+                unit = SourceUnit.Romaji(
+                    atoms = atoms.subList(edgeStartAtomIndex, atoms.size).map { it.id },
+                ),
+            )
+
+            edges.add(pendingEdge)
+        }
+
+        return TransliterationTrace.of(atoms = atoms, edges = edges)
     }
 
     private fun toKana(romaji: String, finalizeTrailing: Boolean): String {

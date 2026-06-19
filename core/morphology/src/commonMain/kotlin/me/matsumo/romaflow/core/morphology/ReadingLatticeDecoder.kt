@@ -3,9 +3,26 @@ package me.matsumo.romaflow.core.morphology
 /**
  * 読み（ひらがな）から lexical lattice を構築し、Viterbi アルゴリズムで最小コスト経路を求める。
  *
- * A-spike の核となる実装。[ReadingLexicon] と [ConnectionCostProvider] を受け取り、
- * reading 座標の lexical lattice を構築し、単語コスト＋連接コストの最小化で
- * 最良経路・N-best 経路を求める。
+ * [ReadingLexicon] と [ConnectionCostProvider] を受け取り、reading 座標の lexical lattice を
+ * 構築し、単語コスト＋連接コストの最小化で最良経路・真のグローバル N-best 経路を求める。
+ *
+ * ## N-best アルゴリズム（A-2 改）
+ *
+ * 連接コストは [io.github.tokuhirom.momiji.core.matrix.Matrix.find] が返す [Short] を符号付きの
+ * まま使うため**負になり得る**（例: BOS→BOS = -434）。Dijkstra 型の単純前向き best-first は
+ * 負コストの存在下でグローバル N-best を保証しない（部分コストが小さくても suffix が大きく
+ * 完全コストが上位でない経路を早期確定してしまう）。
+ *
+ * 修正アルゴリズム: **後ろ向き DP + 前向き A***
+ * 1. 後ろ向き DP（[computeMinSuffixCost]）: DAG 上で各ノードの「end から EOS までの最小コスト
+ *    （EOS 連接コスト込み）」を end offset の降順に厳密に求める。DAG の辺は前方向のみのため
+ *    トポロジカル順（offset 降順）で解けば負コストでも厳密な最小値が得られる。
+ * 2. 前向き A*（[collectNBestPaths]）: 優先度を `f = g（prefix 実コスト）+ h（最小 suffix cost）`
+ *    とする。h は**厳密な下界**（DAG の最小 suffix）であるため admissible かつ consistent。
+ *    これにより complete state を pop した順が真のグローバル昇順になる。
+ *
+ * EOS 連接コストは suffix cost に含め、complete state の f 値がそのまま総コストになる。
+ * 二重加算しない（既存の [viterbi] / EOS regression テストを壊さない）。
  */
 object ReadingLatticeDecoder {
 
@@ -51,10 +68,11 @@ object ReadingLatticeDecoder {
     }
 
     /**
-     * N-best 経路を cumulative cost 昇順で返す。
+     * 真のグローバル N-best 経路を cumulative cost 昇順で返す。
      *
-     * 全完全経路を DFS で列挙し、コスト昇順で上位 [n] 件を返す。
-     * 短い reading（7 文字程度）での利用を想定しており、長い reading では経路数が増える点に注意。
+     * 後ろ向き DP で各ノードの最小 suffix cost を求め、A* の厳密下界ヒューリスティックとして
+     * 使うことで、連接コストが負の場合でもグローバル N-best を保証する。
+     * EOS 連接コスト（最終語 rcAttr → BOS_EOS_CONTEXT_ID）を総コストに含め、二重加算しない。
      */
     fun nBest(
         reading: String,
@@ -62,9 +80,10 @@ object ReadingLatticeDecoder {
         costProvider: ConnectionCostProvider,
         n: Int = DEFAULT_N_BEST,
     ): List<Pair<Long, List<LexemeEntry>>> {
-        val (beginNodes, _) = buildNodes(reading, lexicon)
+        val (beginNodes, endNodes) = buildNodes(reading, lexicon)
+        val minSuffixCost = computeMinSuffixCost(reading.length, beginNodes, endNodes, costProvider)
 
-        return collectAllCompletePaths(reading.length, beginNodes, costProvider, n)
+        return collectNBestPaths(reading.length, beginNodes, costProvider, minSuffixCost, n)
     }
 
     /**
@@ -149,8 +168,10 @@ object ReadingLatticeDecoder {
         beginNodes: Array<MutableList<LatticeNode>>,
         costProvider: ConnectionCostProvider,
     ): List<LexemeEntry> {
-        val endNodes = beginNodes.flatMap { it }.filter { node -> node.endOffset == reading.length }
-        val reachableEndNodes = endNodes.filter { node -> node.minCost != Long.MAX_VALUE }
+        val allNodes = beginNodes.flatMap { it }
+        val reachableEndNodes = allNodes.filter { node ->
+            node.endOffset == reading.length && node.minCost != Long.MAX_VALUE
+        }
 
         if (reachableEndNodes.isEmpty()) return emptyList()
 
@@ -171,63 +192,179 @@ object ReadingLatticeDecoder {
     }
 
     /**
-     * DFS で全完全経路を列挙し、コスト昇順で上位 [maxPaths] 件を返す。
+     * 後ろ向き DP で各ノードの「end から EOS までの最小コスト（EOS 連接コスト込み）」を求める。
      *
-     * [beginNodes][0] から始まり [readingLength] に到達する全経路を探索する。
-     * 経路の爆発を防ぐため、収集数が [maxPaths] * 20 を超えた時点で探索を打ち切る。
+     * DAG 上の辺は前方向のみのため、end offset の降順（トポロジカル逆順）で DP を解けば
+     * 負コストがあっても厳密な最小値が得られる。
+     *
+     * 各エントリ key は [LatticeNode] のインスタンス、value はその node の end から EOS までの
+     * 最小コスト。EOS 連接コスト（rcAttr → 0）は suffix cost に含む。
+     *
+     * 到達不能（EOS まで経路がない）ノードは [Long.MAX_VALUE] を持つ。
+     *
+     * [minSuffixByRcAttr]: end offset ごとの rcAttr → 最小 suffix コストのマップを
+     * 内部で保持し、後続ノードが前ノードの suffix を参照する際に使用する。
      */
-    private fun collectAllCompletePaths(
+    private fun computeMinSuffixCost(
+        readingLength: Int,
+        beginNodes: Array<MutableList<LatticeNode>>,
+        endNodes: Array<MutableList<LatticeNode>>,
+        costProvider: ConnectionCostProvider,
+    ): Map<LatticeNode, Long> {
+        val suffixCost = HashMap<LatticeNode, Long>()
+
+        // end offset 降順に DP を解く（DAG トポロジカル逆順）
+        for (endPosition in readingLength downTo 0) {
+            val nodesEndingHere = endNodes[endPosition]
+
+            for (node in nodesEndingHere) {
+                if (endPosition == readingLength) {
+                    // EOS 直前ノード: suffix cost = EOS 連接コスト（rcAttr → 0）
+                    val eosCost = costProvider.transitionCost(node.lexeme.rcAttr, BOS_EOS_CONTEXT_ID)
+                    suffixCost[node] = eosCost.toLong()
+                } else {
+                    // 後続ノードの suffix cost 経由で最小化
+                    val nextNodes = if (endPosition < beginNodes.size) beginNodes[endPosition] else emptyList()
+                    var minReachable = Long.MAX_VALUE
+
+                    for (nextNode in nextNodes) {
+                        val nextSuffix = suffixCost[nextNode] ?: Long.MAX_VALUE
+
+                        if (nextSuffix == Long.MAX_VALUE) continue
+
+                        val connectionCost = costProvider.transitionCost(
+                            node.lexeme.rcAttr,
+                            nextNode.lexeme.lcAttr,
+                        )
+                        val candidate = connectionCost.toLong() + nextNode.lexeme.wcost.toLong() + nextSuffix
+
+                        if (candidate < minReachable) {
+                            minReachable = candidate
+                        }
+                    }
+
+                    suffixCost[node] = minReachable
+                }
+            }
+        }
+
+        return suffixCost
+    }
+
+    /**
+     * 後ろ向き DP の suffix cost を A* ヒューリスティックとした前向き探索で真のグローバル N-best を列挙する。
+     *
+     * ## アルゴリズム
+     * - 優先度: `f = g（BOS から現位置までの実コスト）+ h（現位置ノードの最小 suffix cost）`
+     * - h は厳密下界（DAG の最適 suffix）のため admissible（f ≤ 実際の完全コスト）かつ consistent。
+     * - 完全経路（offset == readingLength）を pop したとき `f = g + eosCost` が真の総コスト。
+     *   負コストが存在しても h の厳密性により、complete を pop した順が真のグローバル昇順になる。
+     *
+     * ## 負コストへの対応
+     * - BOS start（h 値）は readingLength == 0 ならすぐ EOS コスト、そうでなければ
+     *   位置 0 にある全ノードの `(BOS→node 連接コスト + wcost + suffixCost[node])` の最小。
+     * - isComplete フラグで「EOS コストを h から取り除き g に畳み込んだ」状態を管理する。
+     *
+     * ## キュー実装
+     * [MutableList] + `minByOrNull` は O(n)。N ≤ 16 の実用条件では十分。
+     */
+    private fun collectNBestPaths(
         readingLength: Int,
         beginNodes: Array<MutableList<LatticeNode>>,
         costProvider: ConnectionCostProvider,
+        minSuffixCost: Map<LatticeNode, Long>,
         maxPaths: Int,
     ): List<Pair<Long, List<LexemeEntry>>> {
-        val results = mutableListOf<Pair<Long, List<LexemeEntry>>>()
-        val collectLimit = maxPaths * 20
-
-        data class Frame(
+        /**
+         * キューに積む探索状態。
+         *
+         * [fScore] = g（prefix 実コスト）+ h（最小 suffix コスト）。
+         * [isComplete] が true のときは [fScore] が EOS 込みの真の総コスト。
+         */
+        data class SearchState(
+            /** A* の f スコア（g + h）。complete のときは総コスト。 */
+            val fScore: Long,
+            /** BOS から現位置の語終端（exclusive）までの実コスト g。 */
+            val gCost: Long,
+            /** 現在の reading オフセット。 */
             val offset: Int,
+            /** BOS から現位置までのパス（正順）。 */
             val path: List<LexemeEntry>,
-            val cost: Long,
+            /** 直前語の rcAttr（次の連接コスト計算に使用）。 */
             val prevRcAttr: Int,
+            /** EOS コストを g に畳み込み済みの完全経路かどうか。 */
+            val isComplete: Boolean,
         )
 
-        val stack = ArrayDeque<Frame>()
+        val results = mutableListOf<Pair<Long, List<LexemeEntry>>>()
+        val openQueue = mutableListOf<SearchState>()
 
-        stack.addLast(Frame(offset = 0, path = emptyList(), cost = 0L, prevRcAttr = BOS_EOS_CONTEXT_ID))
+        // BOS 初期状態: f = BOS 位置の最小 suffix（後続展開時に正確な f を計算）
+        // offset=0、g=0、prevRcAttr=BOS_EOS_CONTEXT_ID
+        openQueue.add(
+            SearchState(
+                fScore = 0L,
+                gCost = 0L,
+                offset = 0,
+                path = emptyList(),
+                prevRcAttr = BOS_EOS_CONTEXT_ID,
+                isComplete = false,
+            ),
+        )
 
-        while (stack.isNotEmpty() && results.size < collectLimit) {
-            val frame = stack.removeLast()
+        while (openQueue.isNotEmpty() && results.size < maxPaths) {
+            val minIndex = openQueue.indices.minByOrNull { openQueue[it].fScore } ?: break
+            val current = openQueue.removeAt(minIndex)
 
-            if (frame.offset == readingLength) {
-                // EOS 連接コスト（最終語 rcAttr → BOS_EOS_CONTEXT_ID）を最終コストに加える
-                val eosCost = costProvider.transitionCost(frame.prevRcAttr, BOS_EOS_CONTEXT_ID)
-                val totalCostWithEos = frame.cost + eosCost.toLong()
-
-                results.add(totalCostWithEos to frame.path)
+            if (current.isComplete) {
+                results.add(current.gCost to current.path)
                 continue
             }
 
-            if (frame.offset >= beginNodes.size) continue
+            if (current.offset == readingLength) {
+                // EOS 到達: EOS コストを g に畳み込んで complete 状態としてキューに再投入
+                val eosCost = costProvider.transitionCost(current.prevRcAttr, BOS_EOS_CONTEXT_ID)
+                val totalCost = current.gCost + eosCost.toLong()
 
-            for (node in beginNodes[frame.offset]) {
-                val connectionCost = costProvider.transitionCost(frame.prevRcAttr, node.lexeme.lcAttr)
-                val newCost = frame.cost + connectionCost.toLong() + node.lexeme.wcost.toLong()
+                openQueue.add(
+                    SearchState(
+                        fScore = totalCost,
+                        gCost = totalCost,
+                        offset = readingLength,
+                        path = current.path,
+                        prevRcAttr = current.prevRcAttr,
+                        isComplete = true,
+                    ),
+                )
+                continue
+            }
 
-                stack.addLast(
-                    Frame(
+            if (current.offset >= beginNodes.size) continue
+
+            for (node in beginNodes[current.offset]) {
+                val connectionCost = costProvider.transitionCost(current.prevRcAttr, node.lexeme.lcAttr)
+                val newG = current.gCost + connectionCost.toLong() + node.lexeme.wcost.toLong()
+
+                // h = 後続ノードの最小 suffix cost（到達不能なら Long.MAX_VALUE で探索から除外）
+                val heuristic = minSuffixCost[node] ?: Long.MAX_VALUE
+
+                if (heuristic == Long.MAX_VALUE) continue
+
+                val newF = newG + heuristic
+
+                openQueue.add(
+                    SearchState(
+                        fScore = newF,
+                        gCost = newG,
                         offset = node.endOffset,
-                        path = frame.path + node.lexeme,
-                        cost = newCost,
+                        path = current.path + node.lexeme,
                         prevRcAttr = node.lexeme.rcAttr,
+                        isComplete = false,
                     ),
                 )
             }
         }
 
-        // 注意: ここでの sortedBy/take は「収集済み経路内のベスト」であり、グローバル N-best を保証しない。
-        // 経路爆発防止のため collectLimit で DFS を打ち切るため、長い reading ではグローバル最良経路を
-        // 取りこぼす可能性がある。長文対応・真のグローバル N-best は A-2 で改善予定。
-        return results.sortedBy { it.first }.take(maxPaths)
+        return results
     }
 }

@@ -32,6 +32,16 @@ class RomaFlowEngine internal constructor(
         selection = Selection.None,
     )
 
+    // romaji 入力層の source of truth。appendRomaji / finalizePending / pending 削除の経路でのみ更新する。
+    // readingInput / pendingRomaji はここからの projection として算出できる（CompositionSource.asInputBuffer）。
+    // セグメント range に基づく直接削除（deleteReadingInputCharAt）は draft.input を更新し、compositionSource は
+    // その後の appendRomaji で再構築されるため、セグメント削除中の compositionSource は一時的に stale になる
+    // （これは A-3 で統合する際に解消する予定の既知の制約）。
+    private var compositionSource = CompositionSource.empty(revision = 0)
+
+    // 次に生成する InputAtom の ID。単調増加させてセッション内でユニーク性を保証する。
+    private var nextAtomId = 0L
+
     // 入力状態のリビジョン。入力を変える操作のたびに増やし、非同期変換の stale 判定に使う。
     private var inputRevision = 0
 
@@ -60,11 +70,39 @@ class RomaFlowEngine internal constructor(
     fun inputRomaji(text: String): String {
         markInputChanged()
 
-        val composition = converter.appendRomaji(draft.input.pendingRomaji, text)
-        val readingInput = draft.input.readingInput + composition.committedKanaDelta
+        // セッション封止の判定: 以下のいずれかの場合に現在の readingInput を frozenPrefix として封止し、
+        // 新しい romaji セッションを開始する。
+        //
+        // (1) readingInput が compositionSource と乖離している（変換確定・per-segment revert 等の後）。
+        // (2) compositionSource に atoms があるが pending がない（全 atoms が commit 済みで、次の入力は
+        //     新しい音節を始める）かつ既存 atoms を再生すると frozen kana が変わってしまうケース。
+        //     具体例: `hon` → atoms=[h,o,n] committed="ほん" pending="" → 追記 `a` → "hona"="ほな" ❌
+        //     `ky` → atoms=[k,y] pending="ky" → 追記 `a` → "kya" pending="" committed="きゃ" ✓（継続して良い）
+        //
+        // 規則: pending が空かつ atoms が存在する場合は次の入力が直前 atoms の再解釈を引き起こし得るので
+        // セッションを封止する。pending が非空のときは現在の pending に続く文字を追記するので再生成は正当。
+        val currentReadingInput = draft.input.readingInput
+        val hasStalePendingFree = compositionSource.atoms.isNotEmpty() && compositionSource.pendingRomaji.isEmpty()
+        val hasReadingMismatch = currentReadingInput != compositionSource.readingInput
+        val sessionSource = if (hasStalePendingFree || hasReadingMismatch) {
+            CompositionSource.withFrozenPrefix(currentReadingInput, inputRevision)
+        } else {
+            compositionSource
+        }
+
+        val newAtomId = nextAtomId
+        val newSource = sessionSource.appendRomaji(
+            converter = converter,
+            input = text,
+            nextRevision = inputRevision,
+            nextAtomId = newAtomId,
+        )
+
+        nextAtomId += text.length
+        compositionSource = newSource
 
         draft = draft.copy(
-            input = InputBuffer(readingInput, composition.pendingRomaji),
+            input = newSource.asInputBuffer,
             selection = Selection.None,
         )
 
@@ -378,16 +416,27 @@ class RomaFlowEngine internal constructor(
     }
 
     private fun applyPendingFinalization() {
-        val finalized = converter.finalize(draft.input.pendingRomaji)
-        val readingInput = draft.input.readingInput + finalized
+        // 防御的 resync: deleteReadingInputCharAt 等が compositionSource を経由せずに
+        // draft.input.readingInput を更新した後、ここで再投影しないよう乖離を事前に解消する。
+        // pending が空の場合のみ乖離が起こり得る（pending 非空時は inputRomaji が必ず整合させる）。
+        val currentReadingInput = draft.input.readingInput
+        val hasMismatch = draft.input.pendingRomaji.isEmpty() && currentReadingInput != compositionSource.readingInput
 
-        draft = draft.copy(input = InputBuffer(readingInput, ""))
+        if (hasMismatch) {
+            compositionSource = CompositionSource.withFrozenPrefix(currentReadingInput, inputRevision)
+        }
+
+        val newSource = compositionSource.finalizePending(converter)
+
+        compositionSource = newSource
+        draft = draft.copy(input = newSource.asInputBuffer)
     }
 
     private fun deletePendingTail() {
-        val shortened = draft.input.pendingRomaji.dropLast(1)
+        val newSource = compositionSource.deleteLastKana(nextRevision = inputRevision)
 
-        draft = draft.copy(input = draft.input.copy(pendingRomaji = shortened))
+        compositionSource = newSource
+        draft = draft.copy(input = newSource.asInputBuffer)
     }
 
     private fun deleteFromTargetSegment() {
@@ -465,6 +514,9 @@ class RomaFlowEngine internal constructor(
     }
 
     // readingInput の [position] を1文字削り、各 segment の range を追従させる（中間削除では後続が左へ詰まる）。
+    // この経路は segment range に基づく直接削除で compositionSource を経由しないため、削除後に
+    // compositionSource を resync する（pending 空・segment 削除なので frozenPrefix + 空 pending で正しい）。
+    // resync しないと finalize/convert 経路で削除が巻き戻る（compositionSource が stale なまま再投影される）。
     private fun deleteReadingInputCharAt(position: Int) {
         val readingInput = draft.input.readingInput
 
@@ -481,6 +533,8 @@ class RomaFlowEngine internal constructor(
             segments = shiftedSegments,
             selection = clampSelection(draft.selection, displayCount),
         )
+
+        compositionSource = CompositionSource.withFrozenPrefix(newReadingInput, inputRevision)
     }
 
     private fun shiftSegmentForDeletion(segment: Segment, position: Int, newReadingInput: String): Segment? {
@@ -878,6 +932,8 @@ class RomaFlowEngine internal constructor(
 
     private fun clearState() {
         draft = ConversionDraft(InputBuffer("", ""), emptyList(), Selection.None)
+        compositionSource = CompositionSource.empty(revision = inputRevision)
+        nextAtomId = 0L
     }
 
     private companion object {
