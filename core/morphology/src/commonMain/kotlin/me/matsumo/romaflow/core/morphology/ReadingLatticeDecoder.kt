@@ -3,9 +3,12 @@ package me.matsumo.romaflow.core.morphology
 /**
  * 読み（ひらがな）から lexical lattice を構築し、Viterbi アルゴリズムで最小コスト経路を求める。
  *
- * A-spike の核となる実装。[ReadingLexicon] と [ConnectionCostProvider] を受け取り、
- * reading 座標の lexical lattice を構築し、単語コスト＋連接コストの最小化で
- * 最良経路・N-best 経路を求める。
+ * [ReadingLexicon] と [ConnectionCostProvider] を受け取り、reading 座標の lexical lattice を
+ * 構築し、単語コスト＋連接コストの最小化で最良経路・真のグローバル N-best 経路を求める。
+ *
+ * N-best は A-2 で DFS 打ち切り近似から前向き best-first 探索（Dijkstra-like）に変更した。
+ * 優先度付きキューで常に最小コストの部分経路を優先展開するため、グローバル N-best を保証する。
+ * EOS 連接コストを含む総コストで順位付けし、[viterbi] の rank-0 と一致する。
  */
 object ReadingLatticeDecoder {
 
@@ -51,10 +54,12 @@ object ReadingLatticeDecoder {
     }
 
     /**
-     * N-best 経路を cumulative cost 昇順で返す。
+     * 真のグローバル N-best 経路を cumulative cost 昇順で返す。
      *
-     * 全完全経路を DFS で列挙し、コスト昇順で上位 [n] 件を返す。
-     * 短い reading（7 文字程度）での利用を想定しており、長い reading では経路数が増える点に注意。
+     * 前向き best-first 探索（Dijkstra-like / A*）で EOS までの最小コスト完全経路を上位 [n] 件
+     * 列挙する。優先度付きキュー（binary heap 相当）で常に最小コスト部分経路を展開するため、
+     * DFS 打ち切り近似（A-spike 実装）と異なり**グローバル N-best を保証する**。
+     * EOS 連接コスト（最終語 rcAttr → BOS_EOS_CONTEXT_ID）を総コストに含め、二重加算しない。
      */
     fun nBest(
         reading: String,
@@ -64,7 +69,7 @@ object ReadingLatticeDecoder {
     ): List<Pair<Long, List<LexemeEntry>>> {
         val (beginNodes, _) = buildNodes(reading, lexicon)
 
-        return collectAllCompletePaths(reading.length, beginNodes, costProvider, n)
+        return collectNBestPaths(reading.length, beginNodes, costProvider, n)
     }
 
     /**
@@ -149,8 +154,10 @@ object ReadingLatticeDecoder {
         beginNodes: Array<MutableList<LatticeNode>>,
         costProvider: ConnectionCostProvider,
     ): List<LexemeEntry> {
-        val endNodes = beginNodes.flatMap { it }.filter { node -> node.endOffset == reading.length }
-        val reachableEndNodes = endNodes.filter { node -> node.minCost != Long.MAX_VALUE }
+        val allNodes = beginNodes.flatMap { it }
+        val reachableEndNodes = allNodes.filter { node ->
+            node.endOffset == reading.length && node.minCost != Long.MAX_VALUE
+        }
 
         if (reachableEndNodes.isEmpty()) return emptyList()
 
@@ -171,63 +178,103 @@ object ReadingLatticeDecoder {
     }
 
     /**
-     * DFS で全完全経路を列挙し、コスト昇順で上位 [maxPaths] 件を返す。
+     * 前向き best-first 探索で真のグローバル N-best を列挙する。
      *
-     * [beginNodes][0] から始まり [readingLength] に到達する全経路を探索する。
-     * 経路の爆発を防ぐため、収集数が [maxPaths] * 20 を超えた時点で探索を打ち切る。
+     * BOS から出発し、優先度付きキュー（min-heap 相当）で常に最小コストの部分経路を展開する。
+     * EOS 到達時はすぐに記録せず、EOS コストを加算した総コストでキューに再投入する。
+     * これにより EOS コストの大小が経路間で逆転するケースでも正しい順位が保証される。
+     *
+     * アルゴリズムの性質:
+     * - 完全経路を初めて pop したときは、そのコストは真の最小（グローバル N-best 保証）。
+     * - キューは [MutableList] + `minByOrNull` で実装。N ≤ 16 の実用条件では十分。
+     *
+     * EOS フラグ付き SearchState をキューに再投入することで、
+     * EOS コスト込みの総コストが他の部分経路と正しく比較される。
      */
-    private fun collectAllCompletePaths(
+    private fun collectNBestPaths(
         readingLength: Int,
         beginNodes: Array<MutableList<LatticeNode>>,
         costProvider: ConnectionCostProvider,
         maxPaths: Int,
     ): List<Pair<Long, List<LexemeEntry>>> {
-        val results = mutableListOf<Pair<Long, List<LexemeEntry>>>()
-        val collectLimit = maxPaths * 20
-
-        data class Frame(
+        /**
+         * キューに積む探索状態。
+         *
+         * [isComplete] が true の場合、[partialCost] は EOS コストを含む総コストを表し、
+         * キューから pop されたとき即座に結果として記録される。
+         */
+        data class SearchState(
+            /** 累積コスト。[isComplete] が false なら部分コスト、true なら EOS 込み総コスト。 */
+            val partialCost: Long,
+            /** 現在の reading オフセット（[isComplete] == true のときは readingLength）。 */
             val offset: Int,
+            /** BOS から現位置までのパス（正順）。 */
             val path: List<LexemeEntry>,
-            val cost: Long,
+            /** 直前語の rcAttr（次の連接コスト計算に使用）。[isComplete] のとき不要だが保持する。 */
             val prevRcAttr: Int,
+            /** EOS コストを加算済みの完全経路かどうか。 */
+            val isComplete: Boolean,
         )
 
-        val stack = ArrayDeque<Frame>()
+        val results = mutableListOf<Pair<Long, List<LexemeEntry>>>()
+        val openQueue = mutableListOf<SearchState>()
 
-        stack.addLast(Frame(offset = 0, path = emptyList(), cost = 0L, prevRcAttr = BOS_EOS_CONTEXT_ID))
+        openQueue.add(
+            SearchState(
+                partialCost = 0L,
+                offset = 0,
+                path = emptyList(),
+                prevRcAttr = BOS_EOS_CONTEXT_ID,
+                isComplete = false,
+            ),
+        )
 
-        while (stack.isNotEmpty() && results.size < collectLimit) {
-            val frame = stack.removeLast()
+        while (openQueue.isNotEmpty() && results.size < maxPaths) {
+            // 最小コスト状態を取り出す（min-heap の代用）
+            val minIndex = openQueue.indices.minByOrNull { openQueue[it].partialCost } ?: break
+            val current = openQueue.removeAt(minIndex)
 
-            if (frame.offset == readingLength) {
-                // EOS 連接コスト（最終語 rcAttr → BOS_EOS_CONTEXT_ID）を最終コストに加える
-                val eosCost = costProvider.transitionCost(frame.prevRcAttr, BOS_EOS_CONTEXT_ID)
-                val totalCostWithEos = frame.cost + eosCost.toLong()
-
-                results.add(totalCostWithEos to frame.path)
+            if (current.isComplete) {
+                // EOS 済みの完全経路を記録（このコストはグローバル最小が保証されている）
+                results.add(current.partialCost to current.path)
                 continue
             }
 
-            if (frame.offset >= beginNodes.size) continue
+            if (current.offset == readingLength) {
+                // EOS に到達: EOS コストを加算して完全状態としてキューに再投入
+                val eosCost = costProvider.transitionCost(current.prevRcAttr, BOS_EOS_CONTEXT_ID)
+                val totalCost = current.partialCost + eosCost.toLong()
 
-            for (node in beginNodes[frame.offset]) {
-                val connectionCost = costProvider.transitionCost(frame.prevRcAttr, node.lexeme.lcAttr)
-                val newCost = frame.cost + connectionCost.toLong() + node.lexeme.wcost.toLong()
+                openQueue.add(
+                    SearchState(
+                        partialCost = totalCost,
+                        offset = readingLength,
+                        path = current.path,
+                        prevRcAttr = current.prevRcAttr,
+                        isComplete = true,
+                    ),
+                )
+                continue
+            }
 
-                stack.addLast(
-                    Frame(
+            if (current.offset >= beginNodes.size) continue
+
+            for (node in beginNodes[current.offset]) {
+                val connectionCost = costProvider.transitionCost(current.prevRcAttr, node.lexeme.lcAttr)
+                val newCost = current.partialCost + connectionCost.toLong() + node.lexeme.wcost.toLong()
+
+                openQueue.add(
+                    SearchState(
+                        partialCost = newCost,
                         offset = node.endOffset,
-                        path = frame.path + node.lexeme,
-                        cost = newCost,
+                        path = current.path + node.lexeme,
                         prevRcAttr = node.lexeme.rcAttr,
+                        isComplete = false,
                     ),
                 )
             }
         }
 
-        // 注意: ここでの sortedBy/take は「収集済み経路内のベスト」であり、グローバル N-best を保証しない。
-        // 経路爆発防止のため collectLimit で DFS を打ち切るため、長い reading ではグローバル最良経路を
-        // 取りこぼす可能性がある。長文対応・真のグローバル N-best は A-2 で改善予定。
-        return results.sortedBy { it.first }.take(maxPaths)
+        return results
     }
 }
