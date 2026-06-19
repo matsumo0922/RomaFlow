@@ -1,5 +1,7 @@
 package me.matsumo.romaflow.core.ime.shadow
 
+import me.matsumo.romaflow.core.morphology.LexemeEntry
+
 /**
  * 左からの連続 prefix lock を表す制約。
  *
@@ -27,7 +29,7 @@ internal data class PinnedPathConstraint(
      * `lockedPrefixBoundary == 0` のときは空リスト。
      * 各エントリの surface 連結が確定済みの表示文字列になる。
      */
-    val pinnedPath: List<me.matsumo.romaflow.core.morphology.LexemeEntry>,
+    val pinnedPath: List<LexemeEntry>,
 ) {
 
     /** 固定済み prefix の表示文字列（surface 連結）。 */

@@ -2,7 +2,6 @@ package me.matsumo.romaflow.core.ime.shadow
 
 import me.matsumo.romaflow.core.ime.CompositionSource
 import me.matsumo.romaflow.core.ime.RomajiKanaConverter
-import me.matsumo.romaflow.core.ime.SourceSpan
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.LexemeEntry
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
@@ -413,9 +412,7 @@ internal class ShadowCompositionEngine(
     ): Int {
         if (anchor == null) return -1
 
-        val anchorFrom = anchor.sourceSpan.fromAtomIndex
-
-        return segments.indexOfFirst { it.readingStart == anchorFrom }
+        return segments.indexOfFirst { it.readingStart == anchor.readingStart }
     }
 
     /**
@@ -444,18 +441,15 @@ internal class ShadowCompositionEngine(
     /**
      * [segment] から [ClauseAnchor] を構築する。
      *
-     * segment の reading 座標を atom index 相当として [SourceSpan] に変換する。
-     * A-3 スコープでは reading 座標をそのまま atom index として代用する
-     * （A-5 以降で正確な source 座標マッピングに置き換える）。
+     * segment の reading 座標（ひらがな文字インデックス）をそのまま [ClauseAnchor] に設定する。
+     * A-3 では reading が決定的に source atoms と対応するため、reading 座標で十分。
+     * A-5 以降（typo 訂正で reading と source が乖離し得る段階）では
+     * [me.matsumo.romaflow.core.ime.TransliterationTrace] 経由で真の atom 座標へマッピングする。
      */
     private fun buildClauseAnchor(segment: ShadowSegment): ClauseAnchor {
-        val span = SourceSpan(
-            fromAtomIndex = segment.readingStart,
-            toAtomIndex = segment.readingEnd,
-        )
-
         return ClauseAnchor(
-            sourceSpan = span,
+            readingStart = segment.readingStart,
+            readingEnd = segment.readingEnd,
             selectedPathId = state.selectedPathId ?: CompositionGraph.PathId(0),
         )
     }

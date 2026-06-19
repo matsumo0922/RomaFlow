@@ -1,6 +1,7 @@
 package me.matsumo.romaflow.core.ime.shadow
 
 import me.matsumo.romaflow.core.ime.CompositionSource
+import me.matsumo.romaflow.core.morphology.LexemeEntry
 
 /**
  * shadow エンジンの変換状態。
@@ -100,7 +101,7 @@ internal data class CompositionState(
     }
 
     private fun buildConvertedSegments(
-        path: List<me.matsumo.romaflow.core.morphology.LexemeEntry>,
+        path: List<LexemeEntry>,
         currentReading: String,
     ): List<ShadowSegment> {
         val segments = mutableListOf<ShadowSegment>()

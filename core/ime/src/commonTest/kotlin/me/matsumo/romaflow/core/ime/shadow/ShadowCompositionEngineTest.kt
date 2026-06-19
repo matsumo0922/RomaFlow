@@ -395,7 +395,7 @@ class ShadowCompositionEngineTest {
         val anchorAtFirst = engine.state.clauseAnchor
 
         assertNotNull(anchorAtFirst, "← もう1回で先頭に移ること")
-        assertEquals(0, anchorAtFirst.sourceSpan.fromAtomIndex, "先頭 segment の fromAtomIndex が 0 であること")
+        assertEquals(0, anchorAtFirst.readingStart, "先頭 segment の readingStart が 0 であること")
 
         // → で次の segment（です）へ移動
         engine.moveClause(forward = true)
