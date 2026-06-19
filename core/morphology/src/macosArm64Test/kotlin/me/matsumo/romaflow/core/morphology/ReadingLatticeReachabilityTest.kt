@@ -2,8 +2,8 @@ package me.matsumo.romaflow.core.morphology
 
 import io.github.tokuhirom.momiji.ipadic.momijiLoadMatrix
 import kotlin.test.Test
-import kotlin.test.assertFalse
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**

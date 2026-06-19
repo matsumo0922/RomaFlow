@@ -1,9 +1,12 @@
 package me.matsumo.romaflow.core.ime
 
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.toKString
 import kotlinx.coroutines.runBlocking
 import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
 import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
+import platform.posix.getenv
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -13,7 +16,8 @@ import kotlin.time.TimeSource
  * A-0 バッチ評価ハーネス。
  *
  * 決定論的な lattice / Viterbi 部分を常に実行し、N-best の精度・レイテンシを計測する。
- * LLM ライブテストは OPENAI_API_KEY が設定されている場合のみ実行する（opt-in）。
+ * LLM ライブテストは OPENAI_API_KEY が設定されている **かつ**
+ * 環境変数 `A0_LIVE_TEST_ENABLED=true` を明示した場合のみ実行する（二重 opt-in）。
  */
 class BatchEvaluationHarnessTest {
 
@@ -113,21 +117,36 @@ class BatchEvaluationHarnessTest {
     }
 
     /**
-     * LLM ライブテスト（opt-in）。OPENAI_API_KEY が空の場合はスキップする。
+     * LLM ライブテスト（二重 opt-in）。
+     *
+     * 以下の両条件が揃った場合のみ実行する:
+     * 1. `BuildKonfig.OPENAI_API_KEY` が非空（local.properties で設定済み）
+     * 2. 環境変数 `A0_LIVE_TEST_ENABLED=true` が明示されている
      *
      * [defaultConversionProvider] を使い、corpus readings をそれぞれ変換して
      * resolver の 1 往復レイテンシ（p50/p95）と top-1 精度を計測・報告する。
-     * このテストはネットワーク呼び出しを含むため、CI の通常フローでは実行しないこと
-     * （API キーが未設定なら自動スキップ）。
+     * このテストはネットワーク呼び出しを含むため、CI の通常フローでは実行しないこと。
+     *
+     * 手動実行例:
+     * ```
+     * A0_LIVE_TEST_ENABLED=true ./gradlew :core:ime:macosArm64Test --no-configuration-cache
+     * ```
      *
      * TODO: corpus サイズを各カテゴリ 20〜50 文に拡大する（現状は PoC の最小構成）
      */
+    @OptIn(ExperimentalForeignApi::class)
     @Test
     fun a0LlmLiveTest() {
         val apiKey = BuildKonfig.OPENAI_API_KEY
+        val liveTestEnabled = getenv("A0_LIVE_TEST_ENABLED")?.toKString() == "true"
 
         if (apiKey.isEmpty()) {
             println("=== A-0 LLM Live Test: SKIPPED (OPENAI_API_KEY is not configured) ===")
+            return
+        }
+
+        if (!liveTestEnabled) {
+            println("=== A-0 LLM Live Test: SKIPPED (A0_LIVE_TEST_ENABLED != true) ===")
             return
         }
 
@@ -163,7 +182,7 @@ class BatchEvaluationHarnessTest {
             val isCorrect = result.trim() == expectedTop1
             if (isCorrect) top1Correct++
 
-            println("reading=$reading expected=$expectedTop1 result=$result elapsed=${elapsed} correct=$isCorrect")
+            println("reading=$reading expected=$expectedTop1 result=$result elapsed=$elapsed correct=$isCorrect")
         }
 
         val sortedLatencies = latencies.sorted()
@@ -176,8 +195,7 @@ class BatchEvaluationHarnessTest {
 
         println("=== LLM Live Test Results ===")
         println("latency p50=${p50Ms}ms p95=${p95Ms}ms")
-        val top1AccuracyPercent = (top1Accuracy * 100).toInt()
-        println("top-1 accuracy=${top1AccuracyPercent}% ($top1Correct/${corpus.size})")
+        println("top-1 accuracy=${(top1Accuracy * 100).toInt()}% ($top1Correct/${corpus.size})")
         println("all latencies (ms): $sortedLatencies")
     }
 }

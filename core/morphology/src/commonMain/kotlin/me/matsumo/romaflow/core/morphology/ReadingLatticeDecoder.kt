@@ -35,6 +35,7 @@ object ReadingLatticeDecoder {
      * Viterbi アルゴリズムで最小コスト経路を求め、[LexemeEntry] のリストとして返す。
      *
      * BOS から EOS まで連接コスト＋単語コストを最小化する経路を返す。
+     * EOS 連接コスト（最終語の rcAttr → BOS_EOS_CONTEXT_ID）も含めた総コストで比較する。
      * reading 全体をカバーする経路が存在しない場合は空リストを返す。
      */
     fun viterbi(
@@ -46,7 +47,7 @@ object ReadingLatticeDecoder {
 
         runForwardPass(reading, beginNodes, endNodes, costProvider)
 
-        return traceBackBestPath(reading, beginNodes)
+        return traceBackBestPath(reading, beginNodes, costProvider)
     }
 
     /**
@@ -139,18 +140,24 @@ object ReadingLatticeDecoder {
     /**
      * Viterbi backpointer をたどり、最小コスト経路の [LexemeEntry] リストを返す。
      *
-     * EOS に到達するノード（endOffset == reading.length）で最小コストのものから逆順にたどる。
+     * EOS に到達するノード（endOffset == reading.length）について、
+     * `minCost + EOS 連接コスト` で比較して最小のものから逆順にたどる。
+     * EOS コストは比較にのみ使い、[LatticeNode.minCost] 自体は書き換えない（二重加算防止）。
      */
     private fun traceBackBestPath(
         reading: String,
         beginNodes: Array<MutableList<LatticeNode>>,
+        costProvider: ConnectionCostProvider,
     ): List<LexemeEntry> {
         val endNodes = beginNodes.flatMap { it }.filter { node -> node.endOffset == reading.length }
         val reachableEndNodes = endNodes.filter { node -> node.minCost != Long.MAX_VALUE }
 
         if (reachableEndNodes.isEmpty()) return emptyList()
 
-        val bestEndNode = reachableEndNodes.minByOrNull { it.minCost } ?: return emptyList()
+        val bestEndNode = reachableEndNodes.minByOrNull { node ->
+            val eosCost = costProvider.transitionCost(node.lexeme.rcAttr, BOS_EOS_CONTEXT_ID)
+            node.minCost + eosCost.toLong()
+        } ?: return emptyList()
 
         val path = mutableListOf<LexemeEntry>()
         var currentNode: LatticeNode? = bestEndNode
@@ -193,7 +200,11 @@ object ReadingLatticeDecoder {
             val frame = stack.removeLast()
 
             if (frame.offset == readingLength) {
-                results.add(frame.cost to frame.path)
+                // EOS 連接コスト（最終語 rcAttr → BOS_EOS_CONTEXT_ID）を最終コストに加える
+                val eosCost = costProvider.transitionCost(frame.prevRcAttr, BOS_EOS_CONTEXT_ID)
+                val totalCostWithEos = frame.cost + eosCost.toLong()
+
+                results.add(totalCostWithEos to frame.path)
                 continue
             }
 
