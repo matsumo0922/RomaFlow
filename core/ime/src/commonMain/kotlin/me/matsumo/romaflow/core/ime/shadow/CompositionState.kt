@@ -36,7 +36,7 @@ internal data class CompositionState(
      * 節選択・candidate 確定で特定 path に変更する。
      */
     val selectedPathId: CompositionGraph.PathId?,
-    /** 節単位の選択位置（source 座標）。未選択は null。 */
+    /** 節単位の選択位置（reading 座標）。未選択は null。 */
     val clauseAnchor: ClauseAnchor?,
     /** 左からの連続 prefix lock 制約。 */
     val pinnedConstraint: PinnedPathConstraint,
@@ -64,12 +64,16 @@ internal data class CompositionState(
      * 現在の selected path から導出した [ShadowSegment] リストを返す。
      *
      * selected path が無い（未変換）場合は reading 全体を1つの Unconverted セグメントとして返す。
-     * [pinnedConstraint] の boundary に基づき Locked / Converted を決定する。
+     * [pinnedConstraint].pinnedPath を先頭に Locked として前置し、graph path（tail）を続ける。
+     *
+     * ## 座標整合
+     * 全 segment の readingStart/End は reading 全体の**絶対座標**で表す。
+     * - pinnedPath 部: readingCursor=0 から各 lexeme.reading.length で前進。
+     * - tail path 部: readingCursor=lockedPrefixBoundary（絶対座標）から開始。
+     * - lock 無し（boundary=0, pinnedPath 空）なら tail 部が 0 から始まり、従来と同一。
      *
      * ## Preview 非破壊性
-     * [clauseAnchor] が指す節に [previewSurface] がある場合、対応セグメントの displaySurface を
-     * preview で上書きする（[ShadowSegment.previewSurface] を設定）。
-     * 元の [ShadowSegment.surface]（graph 由来）は変更しない。
+     * Preview の上書きは A-3 スコープ外（previewSurface は常に null）。A-5 以降で実装する。
      */
     val segments: List<ShadowSegment>
         get() {
@@ -106,20 +110,39 @@ internal data class CompositionState(
     ): List<ShadowSegment> {
         val segments = mutableListOf<ShadowSegment>()
         var readingCursor = 0
-        val boundary = pinnedConstraint.lockedPrefixBoundary
 
-        for (lexeme in path) {
-            val lexemeReading = lexeme.reading
+        // まず pinnedPath（固定 prefix 語列）を Locked segment として前置する。
+        // readingCursor は 0 から各 lexeme の reading 長で前進し、lockedPrefixBoundary まで覆う。
+        for (pinnedLexeme in pinnedConstraint.pinnedPath) {
             val segmentReadingStart = readingCursor
-            val segmentReadingEnd = readingCursor + lexemeReading.length
-            val status = determineStatus(segmentReadingEnd, boundary)
+            val segmentReadingEnd = readingCursor + pinnedLexeme.reading.length
+
+            segments.add(
+                ShadowSegment(
+                    surface = pinnedLexeme.surface,
+                    readingStart = segmentReadingStart,
+                    readingEnd = segmentReadingEnd,
+                    status = ShadowSegmentStatus.Locked,
+                    lexemePath = listOf(pinnedLexeme),
+                    previewSurface = null,
+                ),
+            )
+
+            readingCursor = segmentReadingEnd
+        }
+
+        // 次に graph の path（tail 語列）を Converted segment として続ける。
+        // readingCursor は pinnedPath 後の絶対 reading 座標（= lockedPrefixBoundary）から始まる。
+        for (lexeme in path) {
+            val segmentReadingStart = readingCursor
+            val segmentReadingEnd = readingCursor + lexeme.reading.length
 
             segments.add(
                 ShadowSegment(
                     surface = lexeme.surface,
                     readingStart = segmentReadingStart,
                     readingEnd = segmentReadingEnd,
-                    status = status,
+                    status = ShadowSegmentStatus.Converted,
                     lexemePath = listOf(lexeme),
                     // Preview 上書きは A-3 スコープ外（null = preview なし）。A-5 以降で実装する。
                     previewSurface = null,
@@ -136,18 +159,6 @@ internal data class CompositionState(
         }
 
         return segments
-    }
-
-    private fun determineStatus(
-        segmentReadingEnd: Int,
-        boundary: Int,
-    ): ShadowSegmentStatus {
-        val isFullyLocked = segmentReadingEnd <= boundary
-
-        return when {
-            isFullyLocked -> ShadowSegmentStatus.Locked
-            else -> ShadowSegmentStatus.Converted
-        }
     }
 
     private fun buildUnconvertedTail(
