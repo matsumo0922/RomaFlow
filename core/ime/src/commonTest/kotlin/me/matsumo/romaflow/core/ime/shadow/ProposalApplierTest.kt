@@ -108,6 +108,30 @@ class ProposalApplierTest {
         assertEquals(state, result, "graphRevision 不一致で no-op になること")
     }
 
+    /**
+     * candidatePackDigest が不一致の stale リクエストは状態を変えないことを確認する。
+     *
+     * inputRevision / graphRevision が一致していても、candidatePackDigest が異なる場合は
+     * stale と判定して no-op になることを確認する（3-way revision 全要素の検証）。
+     */
+    @Test
+    fun staleCandidatePackDigestReturnsUnchangedState() {
+        val applier = buildApplier()
+        val state = buildStateWithGraph("てんき", "天気", "テンキ")
+        val request = buildRequest(state, candidatePackDigest = 0)
+
+        val result = applier.apply(
+            proposal = ResolutionProposal.SelectExistingPath(CompositionGraph.PathId(0)),
+            request = request,
+            state = state,
+            currentInputRevision = 0,
+            currentGraphRevision = 0,
+            currentCandidatePackDigest = 1, // 不一致
+        )
+
+        assertEquals(state, result, "candidatePackDigest 不一致で no-op になること")
+    }
+
     // endregion
 
     // region: SelectExistingPath
@@ -398,16 +422,6 @@ class ProposalApplierTest {
             posId = 0,
             wcost = 100,
         )
-    }
-
-    private fun buildSurface(path: List<LexemeEntry>): String {
-        val builder = StringBuilder()
-
-        for (lexeme in path) {
-            builder.append(lexeme.surface)
-        }
-
-        return builder.toString()
     }
 
     // endregion

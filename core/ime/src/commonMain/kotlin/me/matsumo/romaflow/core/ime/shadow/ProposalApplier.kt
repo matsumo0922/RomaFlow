@@ -261,8 +261,8 @@ internal class ProposalApplier(
         )
 
         // preferredSurface に完全一致する候補を cost 昇順で検索
-        val matchedEntry = allRanked.firstOrNull { (_, _, path) ->
-            buildSurfaceFromPath(path) == preferredSurface
+        val matchedEntry = allRanked.firstOrNull { triple ->
+            buildSurface(triple.third) == preferredSurface
         }
 
         if (matchedEntry == null) {
@@ -270,10 +270,13 @@ internal class ProposalApplier(
             return state
         }
 
-        val (totalCost, _, matchedPath) = matchedEntry
-        val matchedReading = buildReadingFromPath(matchedPath)
+        // hypothesis.reading（ひらがな）を graph.reading として使う。
+        // buildReadingFromPath はカタカナを返すため使用しない（should-1 修正）。
+        val matchedTotalCost = matchedEntry.first
+        val matchedHypothesis = matchedEntry.second
+        val matchedPath = matchedEntry.third
 
-        return rebuildGraphWithPath(state, matchedReading, matchedPath, totalCost)
+        return rebuildGraphWithPath(state, matchedHypothesis.reading, matchedPath, matchedTotalCost)
     }
 
     /**
@@ -329,35 +332,6 @@ internal class ProposalApplier(
             selectedPathId = newSelectedPathId,
             clauseAnchor = null,
         )
-    }
-
-    /**
-     * lexeme 経路の surface を連結して表示文字列を作る。
-     */
-    private fun buildSurfaceFromPath(path: List<LexemeEntry>): String {
-        val builder = StringBuilder()
-
-        for (lexeme in path) {
-            builder.append(lexeme.surface)
-        }
-
-        return builder.toString()
-    }
-
-    /**
-     * lexeme 経路の reading（カタカナ）を連結して全 reading を復元する。
-     *
-     * [LexemeEntry.reading] はカタカナで格納されるが、reading の比較は格子の reading 文字列ベースで行うため
-     * ここでは連結のみ行う。実際の格子 reading との整合は reading 正規化（trim）で対応済み。
-     */
-    private fun buildReadingFromPath(path: List<LexemeEntry>): String {
-        val builder = StringBuilder()
-
-        for (lexeme in path) {
-            builder.append(lexeme.reading)
-        }
-
-        return builder.toString()
     }
 
     private companion object {

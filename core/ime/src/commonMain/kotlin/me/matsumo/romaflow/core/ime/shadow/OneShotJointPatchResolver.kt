@@ -61,7 +61,7 @@ internal class OneShotJointPatchResolver(
             return ResolutionProposal.Failure(kind = FailureKind.NoSuitablePath)
         }
 
-        val preferredSurface = extractFirstCandidate(jsonText)
+        val preferredSurface = extractFirstCandidateFromJson(jsonText)
             ?: return ResolutionProposal.Failure(kind = FailureKind.NoSuitablePath)
 
         return ResolutionProposal.ProposeJointCorrection(
@@ -69,21 +69,5 @@ internal class OneShotJointPatchResolver(
             intendedReading = tailReading,
             preferredSurface = preferredSurface,
         )
-    }
-
-    /**
-     * `{"candidates":["候補1","候補2",...]}` 形式の JSON から先頭候補を取り出す。
-     *
-     * 失敗（parse エラー・空配列）の場合は null を返す。
-     * JSON ライブラリへの依存を避けるため、簡易な正規表現ベースの抽出を行う。
-     * 生産品質では kotlinx.serialization を使うべきだが、A-4 の目的は戦略比較であり、
-     * JSON parse の完全正確性は A-5 以降で整備する（§7 割り切り）。
-     */
-    private fun extractFirstCandidate(jsonText: String): String? {
-        // `"candidates":["...","...",...` の最初の要素を取り出す
-        val candidatesPattern = Regex(""""candidates"\s*:\s*\[\s*"([^"]+)"""")
-        val matchResult = candidatesPattern.find(jsonText)
-
-        return matchResult?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
     }
 }

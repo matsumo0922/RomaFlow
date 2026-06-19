@@ -77,7 +77,7 @@ internal class TwoStepToolLoopResolver(
             return buildProposal(
                 sourceSpan = SourceSpan(fromAtomIndex = boundary, toAtomIndex = reading.length),
                 tailReading = tailReading,
-                preferredSurface = secondPassResult,
+                preferredSurface = secondPassResult.trim(),
             )
         }
 
@@ -161,7 +161,8 @@ internal class TwoStepToolLoopResolver(
             return null
         }
 
-        return extractFirstCandidate(jsonText)
+        // extractFirstCandidateFromJson は ShadowResolverHelpers.kt の共有実装を使う
+        return extractFirstCandidateFromJson(jsonText)
     }
 
     /**
@@ -177,30 +178,5 @@ internal class TwoStepToolLoopResolver(
             intendedReading = tailReading,
             preferredSurface = preferredSurface,
         )
-    }
-
-    /**
-     * lexeme 経路の surface を連結して表示文字列を作る。
-     */
-    private fun buildSurface(path: List<me.matsumo.romaflow.core.morphology.LexemeEntry>): String {
-        val builder = StringBuilder()
-
-        for (lexeme in path) {
-            builder.append(lexeme.surface)
-        }
-
-        return builder.toString()
-    }
-
-    /**
-     * `{"candidates":["候補1","候補2",...]}` 形式の JSON から先頭候補を取り出す。
-     *
-     * 失敗（parse エラー・空配列）の場合は null を返す。
-     */
-    private fun extractFirstCandidate(jsonText: String): String? {
-        val candidatesPattern = Regex(""""candidates"\s*:\s*\[\s*"([^"]+)"""")
-        val matchResult = candidatesPattern.find(jsonText)
-
-        return matchResult?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
     }
 }

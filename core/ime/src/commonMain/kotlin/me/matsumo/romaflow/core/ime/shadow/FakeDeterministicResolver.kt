@@ -84,19 +84,6 @@ internal class FakeDeterministicResolver : ConversionResolver {
         return null
     }
 
-    /**
-     * lexeme 経路の surface を連結して表示文字列を作る。
-     */
-    private fun buildSurface(path: List<me.matsumo.romaflow.core.morphology.LexemeEntry>): String {
-        val builder = StringBuilder()
-
-        for (lexeme in path) {
-            builder.append(lexeme.surface)
-        }
-
-        return builder.toString()
-    }
-
     private companion object {
         /**
          * かな読みから優先表層形への変換表。
