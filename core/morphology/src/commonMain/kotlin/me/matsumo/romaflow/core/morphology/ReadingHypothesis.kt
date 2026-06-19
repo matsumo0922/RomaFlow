@@ -10,7 +10,7 @@ package me.matsumo.romaflow.core.morphology
  * A-2 では LLM の実呼び出しは行わず、deterministic な読み候補（または fake 候補）で検証する。
  * 実 LLM resolver は A-4 で実装する。
  */
-data class ReadingHypothesis(
+internal data class ReadingHypothesis(
     /** この仮説の読み（ひらがな）。 */
     val reading: String,
     /**
@@ -31,7 +31,7 @@ data class ReadingHypothesis(
  *
  * 用途: 複数入力候補の横断比較。A-4 以降では LLM が生成した読み仮説を渡す。
  */
-object CrossHypothesisDecoder {
+internal object CrossHypothesisDecoder {
 
     /**
      * cross-hypothesis 比較の結果。

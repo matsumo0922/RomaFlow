@@ -58,16 +58,20 @@ internal class ShadowCompositionEngine(
      *
      * [CompositionSource.appendRomaji] を呼び source を更新する。
      * graph は更新しない（[buildGraph] を別途呼ぶ）。
-     * pending romaji がある場合は追記継続、session 封止条件では frozenPrefix で新セッション開始。
+     *
+     * ## セッション封止
+     * shadow エンジンでは source が単一 SoT のため、封止条件は [hasStalePendingFree] のみ:
+     * 既存 atoms があり pending が空（= 全 atoms が commit 済み）の場合、次の入力が直前 atoms の
+     * 再解釈を引き起こし得るので frozenPrefix で新セッションを開始する。
+     * （live engine にあった `hasReadingMismatch` は source が二重管理されていた名残で不要。）
      */
     fun inputRomaji(text: String): CompositionState {
         markInputChanged()
 
         val currentReading = state.source.readingInput
         val hasStalePendingFree = state.source.atoms.isNotEmpty() && state.source.pendingRomaji.isEmpty()
-        val hasReadingMismatch = currentReading != state.source.readingInput
 
-        val sessionSource = if (hasStalePendingFree || hasReadingMismatch) {
+        val sessionSource = if (hasStalePendingFree) {
             CompositionSource.withFrozenPrefix(currentReading, inputRevision)
         } else {
             state.source
@@ -209,7 +213,13 @@ internal class ShadowCompositionEngine(
         )
     }
 
-    /** lexeme 経路の reading 総文字数（ひらがな座標での長さ）を計算する。 */
+    /**
+     * lexeme 経路の reading 総文字数を計算する。
+     *
+     * [LexemeEntry.reading] はカタカナで格納されるが、ひらがな→カタカナは 1:1 の文字マッピングのため
+     * [String.length] はひらがな文字数と等しい。この値を [PinnedPathConstraint.lockedPrefixBoundary]
+     * の加算量（ひらがな文字インデックスでの長さ）として使う。
+     */
     private fun computeReadingLength(path: List<LexemeEntry>): Int {
         var total = 0
 
