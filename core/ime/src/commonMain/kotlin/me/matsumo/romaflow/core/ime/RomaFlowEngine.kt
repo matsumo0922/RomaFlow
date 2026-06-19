@@ -416,6 +416,16 @@ class RomaFlowEngine internal constructor(
     }
 
     private fun applyPendingFinalization() {
+        // 防御的 resync: deleteReadingInputCharAt 等が compositionSource を経由せずに
+        // draft.input.readingInput を更新した後、ここで再投影しないよう乖離を事前に解消する。
+        // pending が空の場合のみ乖離が起こり得る（pending 非空時は inputRomaji が必ず整合させる）。
+        val currentReadingInput = draft.input.readingInput
+        val hasMismatch = draft.input.pendingRomaji.isEmpty() && currentReadingInput != compositionSource.readingInput
+
+        if (hasMismatch) {
+            compositionSource = CompositionSource.withFrozenPrefix(currentReadingInput, inputRevision)
+        }
+
         val newSource = compositionSource.finalizePending(converter)
 
         compositionSource = newSource
@@ -504,6 +514,9 @@ class RomaFlowEngine internal constructor(
     }
 
     // readingInput の [position] を1文字削り、各 segment の range を追従させる（中間削除では後続が左へ詰まる）。
+    // この経路は segment range に基づく直接削除で compositionSource を経由しないため、削除後に
+    // compositionSource を resync する（pending 空・segment 削除なので frozenPrefix + 空 pending で正しい）。
+    // resync しないと finalize/convert 経路で削除が巻き戻る（compositionSource が stale なまま再投影される）。
     private fun deleteReadingInputCharAt(position: Int) {
         val readingInput = draft.input.readingInput
 
@@ -520,6 +533,8 @@ class RomaFlowEngine internal constructor(
             segments = shiftedSegments,
             selection = clampSelection(draft.selection, displayCount),
         )
+
+        compositionSource = CompositionSource.withFrozenPrefix(newReadingInput, inputRevision)
     }
 
     private fun shiftSegmentForDeletion(segment: Segment, position: Int, newReadingInput: String): Segment? {

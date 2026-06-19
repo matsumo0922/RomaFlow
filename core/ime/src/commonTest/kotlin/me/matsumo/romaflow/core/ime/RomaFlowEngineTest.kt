@@ -911,6 +911,76 @@ class RomaFlowEngineTest {
         assertEquals("Locked", engine.segmentStatus(1))
         assertEquals("私天気", engine.preeditText())
     }
+
+    // ---- A-1 compositionSource resync 回帰テスト ----
+    // deleteReadingInputCharAt が compositionSource を経由せずに readingInput を変更した後、
+    // finalize/convert 経路で削除が巻き戻らないことを確認する。
+
+    @Test
+    fun deleteBackward_thenFinalize_preservesDeletion() {
+        // 再現ケース: "kaki" → BS → か → finalizePendingRomaji が "かき" を返してはいけない。
+        val engine = newEngine()
+        engine.inputRomaji("kaki")
+
+        assertEquals("か", engine.deleteBackward())
+
+        // finalize は か のまま返すこと（compositionSource 巻き戻り防止）。
+        assertEquals("か", engine.finalizePendingRomaji())
+    }
+
+    @Test
+    fun deleteBackward_thenConvert_sendsDeletedReadingToProvider() = runTest {
+        // deleteBackward 後に convert を発火すると provider へ削除後の reading（"か"）が渡ること。
+        val recording = RecordingConversionProvider()
+        val engine = RomaFlowEngine(recording, FakeSegmenter(), FakeAligner())
+        engine.inputRomaji("kaki")
+
+        engine.deleteBackward()
+        engine.convert()
+
+        val request = requireNotNull(recording.lastRequest)
+        assertEquals("か", request.readingInput)
+    }
+
+    @Test
+    fun multipleDeleteBackward_thenFinalize_preservesAllDeletions() {
+        // 複数回削除した後の finalize でも削除が保持される。
+        val engine = newEngine()
+        engine.inputRomaji("kaki")
+
+        engine.deleteBackward()
+        engine.deleteBackward()
+
+        // "" になる（か も削除される）
+        assertEquals("", engine.preeditText())
+
+        // finalize も "" を返すこと。
+        assertEquals("", engine.finalizePendingRomaji())
+        assertFalse(engine.hasComposition())
+    }
+
+    @Test
+    fun deleteBackward_onUnconvertedSegment_thenConvert_usesFullReading() = runTest {
+        // 変換済 segment を unconverted へ per-segment revert した後に convert しても
+        // compositionSource が stale にならないことを確認する。
+        // revert は draft.input.readingInput を変えないため mismatch は起きないが、
+        // finalize/convert 経路で readingInput が変わらないことを明示的に担保する。
+        val recording = RecordingConversionProvider()
+        val engine = RomaFlowEngine(recording, WATASHI_TENKI_SEGMENTER, FakeAligner())
+        engine.inputRomaji("watashitenki")
+        engine.applyConversion(engine.convert())
+
+        // segment 1（天気）を per-segment revert して unconverted に戻す。
+        engine.moveSelectionLeft()
+        engine.deleteBackward()
+
+        // revert は readingInput を変えない（"わたしてんき" のまま）。
+        // Locked segment がないので convert の provider には全文 "わたしてんき" が渡る。
+        engine.convert()
+
+        val request = requireNotNull(recording.lastRequest)
+        assertEquals("わたしてんき", request.readingInput)
+    }
 }
 
 /** 候補窓の現在候補を index 順に取り出す検証用ヘルパー。 */
