@@ -1,6 +1,10 @@
 package me.matsumo.romaflow.core.ime
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import me.matsumo.romaflow.core.morphology.HomophoneDictionary
+import me.matsumo.romaflow.core.morphology.IpadicHomophoneDictionary
 
 /**
  * RomaFlow IME core の変換 draft を保持するエンジン。
@@ -17,6 +21,7 @@ class RomaFlowEngine internal constructor(
     private val conversionProvider: ConversionProvider,
     private val segmenter: Segmenter,
     private val aligner: ReadingAligner,
+    private val homophoneDictionary: HomophoneDictionary = EmptyHomophoneDictionary,
 ) {
 
     private val converter = RomajiKanaConverter()
@@ -40,8 +45,13 @@ class RomaFlowEngine internal constructor(
     // 実行中の call2 要求が発行されたときの candidateRequestId。結果適用時にこれが現在値と一致するか確認する。
     private var pendingCandidateRequestId = -1
 
-    /** Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner を使う constructor。 */
-    constructor() : this(defaultConversionProvider(), MomijiSegmenter(), DpReadingAligner())
+    /** Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner・IPADIC 辞書を使う constructor。 */
+    constructor() : this(
+        defaultConversionProvider(),
+        MomijiSegmenter(),
+        DpReadingAligner(),
+        IpadicHomophoneDictionary(),
+    )
 
     fun smokeText(): String {
         return buildSmokeText("KMP")
@@ -316,6 +326,9 @@ class RomaFlowEngine internal constructor(
         }
 
         pendingCandidateRequestId = candidateRequestId
+
+        // 候補表示で使う逆引き index を、main をブロックしないよう Default で1回だけ構築する。
+        withContext(Dispatchers.Default) { homophoneDictionary.ensureReady() }
 
         val segment = draft.segments[requireNotNull(segmentIndex)]
         val request = WordCandidateRequest(segment.reading, convertedContext())
@@ -689,7 +702,7 @@ class RomaFlowEngine internal constructor(
         return builder.toString()
     }
 
-    // 選択中の文節に対する候補列（自明候補 + LLM 候補）。未選択 / 未変換対象なら空。
+    // 選択中の文節に対する候補列（自明候補 + 辞書候補 + LLM 候補）。未選択 / 未変換対象なら空。
     private fun currentCandidates(): List<String> {
         val segmentIndex = selectedSegmentIndexOrNull() ?: return emptyList()
         val segment = draft.segments.getOrNull(segmentIndex) ?: return emptyList()
@@ -698,9 +711,14 @@ class RomaFlowEngine internal constructor(
             return emptyList()
         }
 
-        val merged = obviousCandidates(segment) + segment.candidates
+        val merged = obviousCandidates(segment) + dictionaryCandidates(segment) + segment.candidates
 
         return merged.filter { it.isNotEmpty() }.distinct()
+    }
+
+    // 辞書（同音異義逆引き）由来の候補。segment.reading はひらがな。empty 辞書なら空。
+    private fun dictionaryCandidates(segment: Segment): List<String> {
+        return homophoneDictionary.homophoneCandidates(segment.reading)
     }
 
     // call2 の文脈に渡す変換済み全文。preview は反映せず draft.segments の実 surface を連結する。
