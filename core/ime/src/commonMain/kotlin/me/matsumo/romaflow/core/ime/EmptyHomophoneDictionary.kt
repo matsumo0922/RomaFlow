@@ -11,6 +11,10 @@ import me.matsumo.romaflow.core.morphology.HomophoneDictionary
  */
 internal object EmptyHomophoneDictionary : HomophoneDictionary {
 
+    override fun ensureReady() {
+        // 構築すべき index を持たないため no-op。
+    }
+
     override fun homophoneCandidates(reading: String): List<String> {
         return emptyList()
     }

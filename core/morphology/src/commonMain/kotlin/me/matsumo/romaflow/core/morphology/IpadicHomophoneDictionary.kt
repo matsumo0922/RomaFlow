@@ -1,21 +1,38 @@
 package me.matsumo.romaflow.core.morphology
 
+import kotlin.concurrent.Volatile
+
 /**
  * IPADIC を素材にした [HomophoneDictionary] の本番実装。
  *
  * [IpadicEntrySource.readEntries] が返す全エントリ（reading はカタカナ）を、
  * ひらがなキー → 表層候補リストの逆引き index に1回だけ変換してキャッシュする。
- * index 構築は重い（数十万件）ため [reverseIndex] を `by lazy` とし、初回の
- * [homophoneCandidates] 呼び出し時にのみ構築する。
+ * index 構築は重い（数十万件）ため [lazyIndex] を `by lazy` とし、[ensureReady] からのみ構築する。
+ * [source] は [lazyIndex] のクロージャ内だけで参照し property 保持しないため、構築完了後に
+ * source（読み込んだ全エントリ込み）が GC 可能になり、保持されるのは逆引き Map のみになる。
  */
-class IpadicHomophoneDictionary(private val source: IpadicEntrySource = IpadicDictReader()) : HomophoneDictionary {
+class IpadicHomophoneDictionary(source: IpadicEntrySource = IpadicDictReader()) : HomophoneDictionary {
 
-    private val reverseIndex: Map<String, List<String>> by lazy { buildReverseIndex(source.readEntries()) }
+    private val lazyIndex: Lazy<Map<String, List<String>>> = lazy { buildReverseIndex(source.readEntries()) }
+
+    @Volatile
+    private var isReady = false
+
+    override fun ensureReady() {
+        // lazy は thread-safe かつ once。重い構築をここで走らせ（呼び出し側が off-main）、ready を立てる。
+        lazyIndex.value
+
+        isReady = true
+    }
 
     override fun homophoneCandidates(reading: String): List<String> {
+        if (!isReady) {
+            return emptyList()
+        }
+
         val normalizedKey = normalizeReadingKey(reading)
 
-        return reverseIndex[normalizedKey].orEmpty()
+        return lazyIndex.value[normalizedKey].orEmpty()
     }
 
     companion object {

@@ -1,5 +1,7 @@
 package me.matsumo.romaflow.core.ime
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import me.matsumo.romaflow.core.morphology.HomophoneDictionary
 import me.matsumo.romaflow.core.morphology.IpadicHomophoneDictionary
@@ -324,6 +326,9 @@ class RomaFlowEngine internal constructor(
         }
 
         pendingCandidateRequestId = candidateRequestId
+
+        // 候補表示で使う逆引き index を、main をブロックしないよう Default で1回だけ構築する。
+        withContext(Dispatchers.Default) { homophoneDictionary.ensureReady() }
 
         val segment = draft.segments[requireNotNull(segmentIndex)]
         val request = WordCandidateRequest(segment.reading, convertedContext())

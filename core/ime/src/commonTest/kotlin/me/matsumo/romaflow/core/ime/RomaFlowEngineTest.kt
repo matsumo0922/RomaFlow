@@ -774,6 +774,29 @@ class RomaFlowEngineTest {
     }
 
     @Test
+    fun requestWordCandidates_callsEnsureReadyOnDictionary() = runTest {
+        // 候補窓 open（call2 要求）時に、逆引き index 構築の ensureReady が辞書へ配線されている。
+        val dictionary = FakeHomophoneDictionary(
+            mapOf(
+                "てんき" to listOf("転記"),
+            ),
+        )
+        val engine = RomaFlowEngine(
+            FakeConversionProvider(),
+            WATASHI_TENKI_SEGMENTER,
+            FakeAligner(),
+            dictionary,
+        )
+        engine.inputRomaji("watashitenki")
+        engine.convertAndApply()
+
+        engine.moveSelectionLeft()
+        engine.requestWordCandidates()
+
+        assertTrue(dictionary.ensureReadyCount >= 1, "requestWordCandidates が ensureReady を呼ぶこと")
+    }
+
+    @Test
     fun reconvert_preservesLockedPrefixAndReconvertsOnlyTail() = runTest {
         val engine = newEngine(RECONVERT_SEGMENTER)
         engine.inputRomaji("watashitenki")
@@ -979,8 +1002,20 @@ private class MappedSegmenter(private val table: Map<String, List<SegmentToken>>
     }
 }
 
-/** 指定した読み（ひらがな）→ 表層候補の固定表を返すテスト用 [HomophoneDictionary]。未登録の読みは空。 */
+/**
+ * 指定した読み（ひらがな）→ 表層候補の固定表を返すテスト用 [HomophoneDictionary]。未登録の読みは空。
+ *
+ * 常に ready 扱いの fake で、[ensureReady] は呼ばれた回数を記録するだけ（重い構築は持たない）。
+ * これによりマージ順検証は従来通り即候補を返しつつ、配線確認では呼び出し回数を検証できる。
+ */
 private class FakeHomophoneDictionary(private val table: Map<String, List<String>>) : HomophoneDictionary {
+
+    var ensureReadyCount = 0
+        private set
+
+    override fun ensureReady() {
+        ensureReadyCount++
+    }
 
     override fun homophoneCandidates(reading: String): List<String> {
         return table[reading].orEmpty()

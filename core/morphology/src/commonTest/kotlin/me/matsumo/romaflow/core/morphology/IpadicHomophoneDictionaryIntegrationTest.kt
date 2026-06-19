@@ -9,6 +9,8 @@ class IpadicHomophoneDictionaryIntegrationTest {
 
     @Test
     fun homophoneCandidates_returnsMultipleKanjiForKoushiReading() {
+        dictionary.ensureReady()
+
         val candidates = dictionary.homophoneCandidates(READING_KOUSHI)
         val matchedCandidates = KOUSHI_CANDIDATES.filter(candidates::contains)
 
@@ -20,6 +22,8 @@ class IpadicHomophoneDictionaryIntegrationTest {
 
     @Test
     fun homophoneCandidates_includesTokyoForTokyoReading() {
+        dictionary.ensureReady()
+
         val candidates = dictionary.homophoneCandidates(READING_TOKYO)
 
         assertTrue(
@@ -30,6 +34,8 @@ class IpadicHomophoneDictionaryIntegrationTest {
 
     @Test
     fun homophoneCandidates_capsCandidatesPerReading() {
+        dictionary.ensureReady()
+
         val candidates = dictionary.homophoneCandidates(READING_KOUSHI)
 
         assertTrue(

@@ -10,9 +10,18 @@ package me.matsumo.romaflow.core.morphology
 interface HomophoneDictionary {
 
     /**
+     * 重い逆引き index を構築し、以降の [homophoneCandidates] が候補を返せる状態にする。
+     *
+     * 本番実装では数十万件の辞書を parse する重い処理になるため、呼び出し側は main 以外の
+     * スレッドで呼ぶこと。複数回呼んでも構築は1回だけ走る（冪等）。
+     */
+    fun ensureReady()
+
+    /**
      * [reading]（ひらがな）に対応する表層候補を優先度順で返す。
      *
      * 優先度は出現しやすさ（単語コスト昇順）に基づく。該当する候補が無い場合は空リストを返す。
+     * [ensureReady] 完了前は main をブロックしないために常に空リストを返す（non-blocking）。
      */
     fun homophoneCandidates(reading: String): List<String>
 }

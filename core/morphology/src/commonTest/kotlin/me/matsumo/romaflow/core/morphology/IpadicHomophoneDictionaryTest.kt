@@ -84,8 +84,45 @@ class IpadicHomophoneDictionaryTest {
     }
 
     @Test
+    fun homophoneCandidates_returnsEmptyBeforeEnsureReady() {
+        val entries = listOf(
+            IpadicEntry(surface = "東京", reading = "トウキョウ", wcost = 100),
+        )
+        val dictionary = IpadicHomophoneDictionary(FakeIpadicDictReader(entries))
+
+        assertEquals(emptyList(), dictionary.homophoneCandidates("とうきょう"))
+    }
+
+    @Test
+    fun homophoneCandidates_returnsCandidatesAfterEnsureReady() {
+        val entries = listOf(
+            IpadicEntry(surface = "東京", reading = "トウキョウ", wcost = 100),
+        )
+        val dictionary = IpadicHomophoneDictionary(FakeIpadicDictReader(entries))
+
+        dictionary.ensureReady()
+
+        assertEquals(listOf("東京"), dictionary.homophoneCandidates("とうきょう"))
+    }
+
+    @Test
+    fun ensureReady_isIdempotentAcrossRepeatedCalls() {
+        val entries = listOf(
+            IpadicEntry(surface = "東京", reading = "トウキョウ", wcost = 100),
+        )
+        val dictionary = IpadicHomophoneDictionary(FakeIpadicDictReader(entries))
+
+        dictionary.ensureReady()
+        dictionary.ensureReady()
+
+        assertEquals(listOf("東京"), dictionary.homophoneCandidates("とうきょう"))
+    }
+
+    @Test
     fun homophoneCandidates_returnsEmptyForUnknownReading() {
         val dictionary = IpadicHomophoneDictionary(FakeIpadicDictReader(emptyList()))
+
+        dictionary.ensureReady()
 
         assertEquals(emptyList(), dictionary.homophoneCandidates("みとうろく"))
     }
@@ -96,6 +133,8 @@ class IpadicHomophoneDictionaryTest {
             IpadicEntry(surface = "東京", reading = "トウキョウ", wcost = 100),
         )
         val dictionary = IpadicHomophoneDictionary(FakeIpadicDictReader(entries))
+
+        dictionary.ensureReady()
 
         assertEquals(listOf("東京"), dictionary.homophoneCandidates("トウキョウ"))
         assertEquals(listOf("東京"), dictionary.homophoneCandidates("とうきょう"))
