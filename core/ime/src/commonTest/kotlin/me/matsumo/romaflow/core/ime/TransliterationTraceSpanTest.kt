@@ -141,7 +141,7 @@ class TransliterationTraceSpanTest {
         // LiteralReading unit になっている
         val unit = edges[0].unit
         assertTrue(unit is SourceUnit.LiteralReading, "committed 削除後のエッジは LiteralReading を持つこと")
-        assertEquals("き", (unit as SourceUnit.LiteralReading).reading)
+        assertEquals("き", unit.reading)
     }
 
     @Test
