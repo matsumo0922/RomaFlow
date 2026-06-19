@@ -59,6 +59,12 @@ internal class RomajiKanaConverter {
      *
      * これにより `n`+子音（`n` は pending → `nb` で `ん`+`b` pending に変化）、`tt`+母音（`tt` pending → `tta` で
      * `った` committed）、`kyo` 一括（`k` pending → `ky` pending → `kyo` で `きょ` committed）に対応できる。
+     *
+     * ## span 帰属の正確性
+     * committed edge の span 終端は「現在の pending を構成する末尾 atom 数」を引いた位置にする。
+     * 各 atom は text 長 1 文字を前提とし、pendingDisplay.length が pending atom 数に等しい。
+     * 例: `nb` の時点で pendingDisplay="b"(1文字) なので committed `ん` の span 終端 = (0+2) - 1 = 1。
+     * これにより committed span `[0,1)` と pending span `[1,2)` が atoms を隙間なく覆う。
      */
     fun buildTrace(atoms: List<InputAtom>): TransliterationTrace {
         if (atoms.isEmpty()) {
@@ -79,16 +85,24 @@ internal class RomajiKanaConverter {
             val hasNewCommitted = committedDelta.isNotEmpty()
 
             if (hasNewCommitted) {
+                // pending を構成する末尾 atom 数（通常 atom=1文字なので pendingDisplay.length と等しい）を
+                // 引いて committed span 終端を求める。これにより trigger atom が committed span に混入しない。
+                val pendingAtomCount = pendingDisplay.length
+                val committedSpanEnd = (atomIndex + 1) - pendingAtomCount
+
                 val committedEdge = TransliterationEdge(
-                    sourceSpan = SourceSpan(fromAtomIndex = edgeStartAtomIndex, toAtomIndex = atomIndex + 1),
+                    sourceSpan = SourceSpan(fromAtomIndex = edgeStartAtomIndex, toAtomIndex = committedSpanEnd),
                     reading = committedDelta,
                     state = TransliterationEdge.EdgeState.Committed,
+                    unit = SourceUnit.Romaji(
+                        atoms = atoms.subList(edgeStartAtomIndex, committedSpanEnd).map { it.id },
+                    ),
                 )
 
                 edges.add(committedEdge)
 
                 committedSoFar = currentCommitted
-                edgeStartAtomIndex = atomIndex + 1
+                edgeStartAtomIndex = committedSpanEnd
             }
         }
 
@@ -101,6 +115,9 @@ internal class RomajiKanaConverter {
                 sourceSpan = SourceSpan(fromAtomIndex = edgeStartAtomIndex, toAtomIndex = atoms.size),
                 reading = pendingDisplay,
                 state = TransliterationEdge.EdgeState.Pending,
+                unit = SourceUnit.Romaji(
+                    atoms = atoms.subList(edgeStartAtomIndex, atoms.size).map { it.id },
+                ),
             )
 
             edges.add(pendingEdge)

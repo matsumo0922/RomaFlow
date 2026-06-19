@@ -10,10 +10,11 @@ package me.matsumo.romaflow.core.ime
  * - committed エッジの [TransliterationEdge.reading] 連結が [CompositionSource.readingInput] と一致する。
  * - pending エッジは末尾に最大1つだけ存在する。
  * - 全エッジの [TransliterationEdge.sourceSpan] が atoms を隙間なく覆う（gaps がない）。
+ *   具体的には先頭エッジの from==0、末尾エッジの to==atoms.size、隣接エッジ間で前の to == 次の from。
  *
  * ## Backspace 削除写像
  * backspace による削除は [deleteLastKana] で行う。raw atom 単純削除ではなく、かな単位で edge を削る。
- * `kyo→きょ` は1エッジなので BS は `き` を [LiteralReading] として残す。
+ * `kyo→きょ` は1エッジなので BS は `き` を [SourceUnit.LiteralReading] として持つエッジとして残す。
  * `か` は `k`+`a` の2 atoms からなるエッジなので BS で丸ごと消える（readingInput の `か` が消える）。
  */
 internal class TransliterationTrace private constructor(
@@ -51,10 +52,10 @@ internal class TransliterationTrace private constructor(
      * 末尾のかな1文字を削除した新しいトレースを返す。
      *
      * 削除対象は末尾の Committed エッジの reading の最後の文字。エッジの reading が2文字以上なら
-     * その文字だけ削り [SourceUnit.LiteralReading] エッジとして再挿入する（`kyo→きょ→BS→き` ケース）。
+     * その文字だけ削り [SourceUnit.LiteralReading] を持つエッジとして再挿入する（`kyo→きょ→BS→き` ケース）。
      * reading が1文字なら丸ごとエッジを削除する（`ka→か→BS→(空)` ケース）。
      *
-     * Pending エッジがある場合はまず pending の末尾1文字を削る（pendingRomaji の dropLast 相当）。
+     * Pending エッジがある場合はまず pending の末尾1文字と対応する末尾 atom を削る。
      * pending が空になった場合はエッジを削除する。
      */
     fun deleteLastKana(): TransliterationTrace {
@@ -72,30 +73,10 @@ internal class TransliterationTrace private constructor(
     }
 
     /**
-     * 新しい [InputAtom] を追記し、変換結果を反映した新しいトレースを返す。
-     *
-     * [newAtoms] は今回追加する atoms、[newEdges] は変換器が生成した全エッジ（committed + pending）。
-     * 既存の全 atoms に [newAtoms] を追記し、全エッジを [newEdges] で置き換える。
-     *
-     * 既存 committed エッジはここで保持しない（呼び出し側が全エッジを再生成して渡す）。
-     * これにより `n`/`tt`/`kyo` のように直前 pending の解釈が変わるケースに対応する。
-     */
-    fun appendAtoms(
-        newAtoms: List<InputAtom>,
-        newEdges: List<TransliterationEdge>,
-    ): TransliterationTrace {
-        val mergedAtoms = atoms + newAtoms
-
-        return TransliterationTrace(
-            atoms = mergedAtoms,
-            edges = newEdges,
-        )
-    }
-
-    /**
      * pending エッジを確定済みに昇格させた新しいトレースを返す。
      *
      * [finalizedReading] は pending ローマ字を確定かなへ変換した文字列（`n`→`ん` 等）。
+     * unit は元の pending edge の unit をそのまま引き継ぐ（atoms id 列は変わらない）。
      */
     fun finalizePending(finalizedReading: String): TransliterationTrace {
         val pendingEdge = edges.lastOrNull() ?: return this
@@ -125,7 +106,14 @@ internal class TransliterationTrace private constructor(
         }
 
         val shrunkSpan = pendingEdge.sourceSpan.copy(toAtomIndex = trimmedAtoms.size)
-        val shortenedEdge = pendingEdge.copy(reading = trimmed, sourceSpan = shrunkSpan)
+        val shortenedUnit = SourceUnit.Romaji(
+            atoms = trimmedAtoms.subList(shrunkSpan.fromAtomIndex, trimmedAtoms.size).map { it.id },
+        )
+        val shortenedEdge = pendingEdge.copy(
+            reading = trimmed,
+            sourceSpan = shrunkSpan,
+            unit = shortenedUnit,
+        )
         val updatedEdges = edges.dropLast(1) + shortenedEdge
 
         return TransliterationTrace(atoms = trimmedAtoms, edges = updatedEdges)
@@ -145,6 +133,7 @@ internal class TransliterationTrace private constructor(
             sourceSpan = lastEdge.sourceSpan,
             reading = trimmedReading,
             state = TransliterationEdge.EdgeState.Committed,
+            unit = SourceUnit.LiteralReading(reading = trimmedReading),
         )
         val updatedEdges = edges.dropLast(1) + literalEdge
 

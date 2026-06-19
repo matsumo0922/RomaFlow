@@ -11,7 +11,7 @@ package me.matsumo.romaflow.core.ime
  * `pendingRomaji`（未確定ローマ字）は `transliteration.pendingDisplay` の projection。
  *
  * 外部から直接 [InputBuffer] を操作するのではなく、[appendRomaji] / [deleteLastKana] / [finalizePending]
- * / [startFreshSession] の API を通じてのみ状態を変える。これにより二重 source of truth を防ぐ。
+ * の API を通じてのみ状態を変える。これにより二重 source of truth を防ぐ。
  *
  * ## 不変条件
  * - [frozenPrefix] + [transliteration].committedReading が [readingInput] と一致する。
@@ -19,11 +19,11 @@ package me.matsumo.romaflow.core.ime
  * - [revision] と [transliteration] は同時に更新される（別々に変わることはない）。
  * - pending エッジは最大1つで末尾にのみ存在する。
  *
- * ## finalize 後の新規入力
- * Tab / commit の前段として [finalizePending] を呼ぶと pending ローマ字が committed に昇格する。
- * その後さらに romaji が追記された場合は、次の [appendRomaji] 呼び出し前に [startFreshSession] を
- * 呼び、現在の [readingInput] を [frozenPrefix] として封止し、atoms を空にリセットする。
- * これにより `hon→ほん→convert→a` のとき `ほん` が `ほな` に再解釈されるのを防ぐ。
+ * ## セッション封止（frozenPrefix）
+ * 入力を変える操作のたびに `readingInput` と `compositionSource.readingInput` の一致を確認し、
+ * 乖離があれば [withFrozenPrefix] で現 readingInput を封止した新セッションを開始する（[RomaFlowEngine] 側の責務）。
+ * また全 atoms が commit 済み（pending 空 + atoms 非空）の場合も封止して次の入力を新セッションとして扱う。
+ * これにより `hon→変換→a` のとき `ほん` が `ほな` に再解釈されるのを防ぐ。
  */
 internal class CompositionSource private constructor(
     val revision: Int,
@@ -74,10 +74,8 @@ internal class CompositionSource private constructor(
      * 末尾のかな1文字（または pending 末尾1文字）を削除した新しい [CompositionSource] を返す。
      *
      * pending エッジがある場合は pending の末尾1文字と対応する末尾 atom を削る。
-     * pending が空の場合は committed 末尾エッジの最後のかなを削る（atoms は変更しない）。
-     *
-     * pending 削除時に atoms を削るのは、再生成アプローチで削除済み文字が再解釈されるのを防ぐため。
-     * committed 削除（`きょ→き` 等）は [SourceUnit.LiteralReading] エッジとして表現するため atoms を変えない。
+     * pending が空の場合は committed 末尾エッジの最後のかなを削り [SourceUnit.LiteralReading] エッジとして残す
+     * （`きょ→き` 等）。atoms は変更しない（fulfilled edge の atom 履歴として保持）。
      */
     fun deleteLastKana(nextRevision: Int): CompositionSource {
         val newTrace = transliteration.deleteLastKana()
@@ -113,22 +111,6 @@ internal class CompositionSource private constructor(
         )
     }
 
-    /**
-     * 現在の [readingInput] を [frozenPrefix] として封止し、atoms と transliteration をリセットした
-     * 新しいセッションの [CompositionSource] を返す。
-     *
-     * Tab 変換後など、確定済みかなを変えずに次の romaji 入力セッションを始めるときに使う。
-     * これにより `hon→ほん（確定）→a` のとき `ほん` が `ほな` に再解釈されるのを防ぐ。
-     */
-    fun startFreshSession(nextRevision: Int): CompositionSource {
-        return CompositionSource(
-            revision = nextRevision,
-            frozenPrefix = readingInput,
-            atoms = emptyList(),
-            transliteration = TransliterationTrace.empty(),
-        )
-    }
-
     companion object {
 
         /** 空の [CompositionSource] を生成する factory メソッド。 */
@@ -145,6 +127,7 @@ internal class CompositionSource private constructor(
          * 指定した [frozenPrefix] を持ち、atoms と transliteration が空の [CompositionSource] を生成する。
          *
          * 変換確定済みのかなを固定したまま、新しい romaji 入力セッションを開始するときに使う。
+         * [RomaFlowEngine.inputRomaji] が readingInput と compositionSource の乖離を検知したときに呼ぶ。
          */
         fun withFrozenPrefix(frozenPrefix: String, revision: Int): CompositionSource {
             return CompositionSource(

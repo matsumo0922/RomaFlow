@@ -11,4 +11,3 @@ internal data class InputAtom(
     val text: String,
     val physicalKeyCode: Int? = null,
 )
-
