@@ -3,6 +3,7 @@ package me.matsumo.romaflow.core.morphology
 import io.github.tokuhirom.momiji.ipadic.momijiLoadMatrix
 import kotlin.test.Test
 import kotlin.test.assertFalse
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -72,7 +73,13 @@ class ReadingLatticeReachabilityTest {
         val hasSingleWordPath = paths.any { (_, path) -> path.size == 1 }
         val hasMultiWordPath = paths.any { (_, path) -> path.size > 1 }
 
-        assertTrue(hasSingleWordPath || hasMultiWordPath, "経路が 1 件以上存在すること")
+        // A-spike 死活条件: 単語経路・複合経路がそれぞれ独立して N-best に共存すること
+        assertTrue(hasSingleWordPath, "N-best に 単語経路（path.size == 1）が含まれること")
+        assertTrue(hasMultiWordPath, "N-best に 複合経路（path.size > 1）が含まれること")
+
+        // rank 0 の path 表層形が ["相変わらず"] であること（Viterbi 最良経路の死活確認）
+        val rank0Surfaces = paths[0].second.map { it.surface }
+        assertEquals(listOf("相変わらず"), rank0Surfaces, "rank 0 の surface 列が [相変わらず] であること")
     }
 
     @Test
@@ -96,10 +103,7 @@ class ReadingLatticeReachabilityTest {
         val allSurfaces = paths.flatMap { (_, path) -> path.map { it.surface } }.toSet()
         println("All surfaces: $allSurfaces")
 
-        val hasTenki = "天気" in allSurfaces || paths.any { (_, path) -> path.any { it.surface == "天気" } }
-        val hasTenki2 = "転機" in allSurfaces || paths.any { (_, path) -> path.any { it.surface == "転機" } }
-
-        assertTrue(hasTenki, "天気 が N-best に含まれること")
-        assertTrue(hasTenki2, "転機 が N-best に含まれること")
+        assertTrue("天気" in allSurfaces, "天気 が N-best に含まれること（found: $allSurfaces）")
+        assertTrue("転機" in allSurfaces, "転機 が N-best に含まれること（found: $allSurfaces）")
     }
 }

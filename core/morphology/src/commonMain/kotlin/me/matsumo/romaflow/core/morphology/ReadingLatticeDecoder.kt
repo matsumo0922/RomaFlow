@@ -214,6 +214,9 @@ object ReadingLatticeDecoder {
             }
         }
 
+        // 注意: ここでの sortedBy/take は「収集済み経路内のベスト」であり、グローバル N-best を保証しない。
+        // 経路爆発防止のため collectLimit で DFS を打ち切るため、長い reading ではグローバル最良経路を
+        // 取りこぼす可能性がある。長文対応・真のグローバル N-best は A-2 で改善予定。
         return results.sortedBy { it.first }.take(maxPaths)
     }
 }

@@ -167,7 +167,8 @@ class BatchEvaluationHarnessTest {
         }
 
         val sortedLatencies = latencies.sorted()
-        val p50Index = sortedLatencies.size / 2
+        // 偶数 corpus でも下側中央を取るため (size - 1) / 2 を使う（切り捨て除算で下寄り）
+        val p50Index = (sortedLatencies.size - 1) / 2
         val p95Index = (sortedLatencies.size * 95 / 100).coerceAtMost(sortedLatencies.size - 1)
         val p50Ms = sortedLatencies[p50Index]
         val p95Ms = sortedLatencies[p95Index]
