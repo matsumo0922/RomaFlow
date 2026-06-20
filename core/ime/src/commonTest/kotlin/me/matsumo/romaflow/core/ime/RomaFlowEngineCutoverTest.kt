@@ -276,14 +276,24 @@ private class PassThroughConversionProvider : ConversionProvider {
     }
 }
 
-/** 常に例外をスローするテスト用 provider（failure no-op テスト用）。 */
+/**
+ * convert / candidates / rerank の全メソッドで例外をスローするテスト用 provider。
+ *
+ * [RerankResolver] の `runCatching { provider.rerank() }.getOrElse { -1 }` catch 経路を
+ * 実際に通すことで、provider 例外時でもクラッシュせず Viterbi fallback が動くことを検証する。
+ */
 private object FailingConversionProvider : ConversionProvider {
     override suspend fun convert(request: ConversionRequest): String {
         error("conversion failed for testing")
     }
 
-    override suspend fun candidates(request: WordCandidateRequest): String = ""
-    override suspend fun rerank(request: RerankRequest): Int = -1
+    override suspend fun candidates(request: WordCandidateRequest): String {
+        error("candidates failed for testing")
+    }
+
+    override suspend fun rerank(request: RerankRequest): Int {
+        error("rerank failed for testing")
+    }
 }
 
 /**

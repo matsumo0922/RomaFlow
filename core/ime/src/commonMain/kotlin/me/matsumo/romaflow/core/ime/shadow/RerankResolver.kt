@@ -4,6 +4,7 @@ import me.matsumo.romaflow.core.ime.ConversionProvider
 import me.matsumo.romaflow.core.ime.RerankRequest
 import me.matsumo.romaflow.core.ime.SourceSpan
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
+import me.matsumo.romaflow.core.morphology.LexemeEntry
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
 
 /**
@@ -116,7 +117,7 @@ internal class RerankResolver(
     /**
      * lexeme 経路の surface を連結して表示文字列を構築する。
      */
-    private fun buildSurfaceFromPath(path: List<me.matsumo.romaflow.core.morphology.LexemeEntry>): String {
+    private fun buildSurfaceFromPath(path: List<LexemeEntry>): String {
         val builder = StringBuilder()
 
         for (lexeme in path) {
