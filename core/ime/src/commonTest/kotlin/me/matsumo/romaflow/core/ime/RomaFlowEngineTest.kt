@@ -1117,9 +1117,11 @@ private fun newEngine(segmenter: Segmenter = FakeSegmenter()): RomaFlowEngine {
 /**
  * エントリを返さないスタブ [ReadingLexicon]。
  *
- * OOV fallback（[me.matsumo.romaflow.core.morphology.LiteralLexicon]）のみで動作させ、
- * [me.matsumo.romaflow.core.morphology.CompositeLexicon] が LiteralLexicon でアークを補完する。
- * これにより ProposalApplier が verified path を見つけられず、legacy buildTailSegments fallback を使う。
+ * 辞書語を返さず、[me.matsumo.romaflow.core.morphology.CompositeLexicon] が
+ * [me.matsumo.romaflow.core.morphology.LiteralLexicon] の literal arc のみで格子を補完する。
+ * このため ProposalApplier は literal full path（かな保持）を verified path として採用でき、
+ * かな以外の格子外 surface のときは辞書 Viterbi 1位（= literal 経路）へ fallback する。
+ * legacy buildTailSegments は graph が空の最終手段としてのみ使われる（通常到達しない）。
  * [RomaFlowEngineTest] の不変条件テストに実辞書ロードを持ち込まないために使う。
  * ([RomaFlowEngineCutoverTest] に同名の object があるため別名を採用)
  */

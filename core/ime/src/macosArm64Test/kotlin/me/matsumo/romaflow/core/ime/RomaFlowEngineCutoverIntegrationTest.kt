@@ -9,16 +9,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * A-5 cutover の結合テスト（macosArm64・実辞書使用）。
+ * A-rerank cutover の結合テスト（macosArm64・実辞書使用）。
  *
  * IpadicReadingLexicon と MomijiConnectionCostProvider を使い、正常 cutover パス
- * （verified path 経由での segment 生成）と OOV/格子外 surface での legacy fallback を確認する。
+ * （verified path 経由での segment 生成）と rerank 失敗時の Viterbi 1位 fallback を確認する。
  *
  * テストケース一覧:
  * - 正常 cutover: provider が「天気」を返すとき verified path 経由で segment が生成されること
  * - segment range 絶対座標: segment の reading が readingInput の offset 0 始まりの絶対座標を指すこと
- * - OOV fallback（真の格子外 surface）: provider が格子上に経路の作れない ASCII surface を返すとき
- *   `buildTailSegments`（legacy aligner 経由）に落ちて surface が表示されること
+ * - rerank 失敗 → Viterbi 1位 fallback: rerank() が -1 を返すとき辞書 rank-0（「天気」）で変換されること
  * - literal verified path: provider が reading と同一の surface を返した場合 LiteralLexicon が
  *   verified path を作り buildTailSegmentsFromPath 経由で segment 化されること（commonTest 側で確認）
  * - 空変換 no-op / stale revision no-op
