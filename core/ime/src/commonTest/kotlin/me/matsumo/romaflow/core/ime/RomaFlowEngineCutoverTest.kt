@@ -7,6 +7,7 @@ import me.matsumo.romaflow.core.morphology.ZeroConnectionCostProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * A-5 cutover の不変条件をテストで固定するテストクラス。
@@ -155,6 +156,34 @@ class RomaFlowEngineCutoverTest {
         // locked prefix（"わ"=1文字）以降の tail が渡ること
         val expectedTail = "たしてんき"
         assertEquals(expectedTail, request.readingInput)
+    }
+
+    @Test
+    fun literalPath_readingAsSurface_segmentsByLiteralLexicon() = runTest {
+        // provider が reading と同一の surface を返す場合、LiteralLexicon が verified path を作る。
+        // これは buildTailSegments（OOV fallback）ではなく buildTailSegmentsFromPath（literal-path）経由。
+        //
+        // StubEmptyReadingLexicon は IPADIC を持たないため LiteralLexicon のみが arc を提供する。
+        // reading の各文字と同一 surface の1文字 arc が verified path を作り、1文字ずつ segment になる。
+        val provider = PassThroughConversionProvider()
+        val engine = RomaFlowEngine(
+            conversionProvider = provider,
+            segmenter = FakeSegmenter(),
+            aligner = FakeAligner(),
+            readingLexicon = StubEmptyReadingLexicon,
+            connectionCostProvider = ZeroConnectionCostProvider,
+        )
+        engine.inputRomaji("tenki")
+        engine.applyConversion(engine.convert())
+
+        // LiteralLexicon の verified path 経由で segment が生成されること
+        assertTrue(engine.isConverted())
+
+        // "てんき" は3文字 → LiteralLexicon arc（て/ん/き）で1文字ずつ3 segment になること
+        assertEquals(3, engine.segmentCount(), "literal-path では1文字ずつ segment になること")
+        assertEquals("て", engine.segmentText(0))
+        assertEquals("ん", engine.segmentText(1))
+        assertEquals("き", engine.segmentText(2))
     }
 }
 

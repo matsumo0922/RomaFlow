@@ -12,14 +12,20 @@ import kotlin.test.assertTrue
  * A-5 cutover の結合テスト（macosArm64・実辞書使用）。
  *
  * IpadicReadingLexicon と MomijiConnectionCostProvider を使い、正常 cutover パス
- * （verified path 経由での segment 生成）を確認する。
+ * （verified path 経由での segment 生成）と OOV/格子外 surface での legacy fallback を確認する。
  *
- * - 正常 cutover: fake provider が「天気」を返すとき、convert()→applyConversion() 後に
- *   segment surface が「天気」・range が readingInput の絶対座標で正しいこと。
- * - OOV fallback: provider が格子上に完全経路のない surface を返しても segment が表示されること。
+ * テストケース一覧:
+ * - 正常 cutover: provider が「天気」を返すとき verified path 経由で segment が生成されること
+ * - segment range 絶対座標: segment の reading が readingInput の offset 0 始まりの絶対座標を指すこと
+ * - OOV fallback（真の格子外 surface）: provider が格子上に経路の作れない ASCII surface を返すとき
+ *   `buildTailSegments`（legacy aligner 経由）に落ちて surface が表示されること
+ * - literal verified path: provider が reading と同一の surface を返した場合 LiteralLexicon が
+ *   verified path を作り buildTailSegmentsFromPath 経由で segment 化されること（commonTest 側で確認）
+ * - 空変換 no-op / stale revision no-op
  *
  * 実辞書ロードがあるため commonTest ではなく macosArm64Test に置く。
  */
+@Suppress("FunctionNaming")
 class RomaFlowEngineCutoverIntegrationTest {
 
     private val lexicon by lazy { IpadicReadingLexicon() }
@@ -53,7 +59,7 @@ class RomaFlowEngineCutoverIntegrationTest {
 
     @Test
     fun cutover_verifiedPath_segmentRangeIsAbsolute() = runBlocking {
-        // segment の range が readingInput の絶対座標を指すこと
+        // segment の range が readingInput の絶対座標（offset 0 始まり）を指すこと
         val provider = FixedConversionProvider("天気")
         val engine = RomaFlowEngine(
             conversionProvider = provider,
@@ -69,17 +75,25 @@ class RomaFlowEngineCutoverIntegrationTest {
 
         engine.applyConversion(convertResult)
 
-        // readingInput 全体（"てんき"=3文字）に対し segment が 0 始まりの絶対座標を持つこと
-        // segmentCount() >= 1 で最初の segment が index 0 から始まること
+        // segment が 1 つ以上あり、surface が "天気" であること
         assertTrue(engine.segmentCount() >= 1)
         assertEquals("天気", engine.segmentText(0))
+
+        // segment の reading が readingInput（"てんき" = 3文字）全体を覆うこと。
+        // verified path では lexeme の reading 長で切り出した ひらがな reading が格納される。
+        // "てんき" は IPADIC で 1 lexeme（天気）として処理されるため reading は "てんき"。
+        assertEquals("てんき", engine.segmentReading(0))
     }
 
     @Test
-    fun cutover_oovFallback_surfaceIsPreserved() = runBlocking {
-        // 格子上に完全経路がない OOV surface でも legacy fallback で segment に表示されること
-        // "ぬるぽ" という OOV 語を provider が返しても segment として確認できること
-        val oovSurface = "ぬるぽ"
+    fun cutover_oovFallback_asciiSurfaceUsesLegacySegmenter() = runBlocking {
+        // OOV fallback: provider が格子上に経路の作れない surface を返したとき
+        // buildTailSegments（legacy segmenter/aligner 経由）に落ちて provider の surface が表示されること。
+        //
+        // ひらがな "てんき" に対して ASCII "XYZ" を返すと、格子の全 arc（IPADIC 語・LiteralLexicon ひらがな文字）
+        // とも surface が一致せず findMinCostPathForSurface が null を返す。
+        // applyWithPreferredSurface → state（isConverted=false）→ buildTailSegments fallback となる。
+        val oovSurface = "XYZ"
         val provider = FixedConversionProvider(oovSurface)
         val engine = RomaFlowEngine(
             conversionProvider = provider,
@@ -89,15 +103,19 @@ class RomaFlowEngineCutoverIntegrationTest {
             connectionCostProvider = costProvider,
         )
 
-        engine.inputRomaji("nurupo")
+        engine.inputRomaji("tenki")
 
         val convertResult = engine.convert()
 
+        // convert() は provider が返した surface をそのまま返す
+        assertEquals(oovSurface, convertResult)
+
         engine.applyConversion(convertResult)
 
-        // OOV でも segment が消えない（legacy buildTailSegments fallback）
-        assertTrue(engine.isConverted() || engine.hasComposition(), "OOV でも状態が保持されること")
+        // legacy buildTailSegments fallback で segment が生成され、surface が provider の結果と一致すること
+        assertTrue(engine.isConverted(), "OOV fallback でも isConverted=true になること")
         assertTrue(engine.segmentCount() >= 1, "segment が最低1つ生成されること")
+        assertEquals(oovSurface, engine.segmentText(0), "legacy fallback の segment surface が provider の結果と一致すること")
     }
 
     @Test
