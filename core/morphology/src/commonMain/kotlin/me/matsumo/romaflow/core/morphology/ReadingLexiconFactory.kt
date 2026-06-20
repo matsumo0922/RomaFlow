@@ -15,3 +15,18 @@ fun buildReadingLexiconWithFallback(primary: ReadingLexicon): ReadingLexicon {
         fallback = LiteralLexicon(),
     )
 }
+
+/**
+ * [entry] が [LiteralLexicon] 由来の fallback arc かどうかを厳密に判定する。
+ *
+ * [LiteralLexicon.buildLiteralLexeme] が生成する [LexemeEntry] と data class 等価比較を行うことで、
+ * wcost 閾値による近似判定（IPADIC に wcost≥8000 の辞書語が在り得るため誤判定リスクあり）を避ける。
+ * 評価ハーネスの OOV / literal fallback 率計測で使用することを想定している。
+ *
+ * [entry] の surface が 1 文字でない場合は即座に false を返す（LiteralLexicon は必ず 1 文字 arc）。
+ */
+fun isLiteralFallbackArc(entry: LexemeEntry): Boolean {
+    if (entry.surface.length != 1) return false
+
+    return entry == LiteralLexicon.buildLiteralLexeme(entry.surface[0])
+}
