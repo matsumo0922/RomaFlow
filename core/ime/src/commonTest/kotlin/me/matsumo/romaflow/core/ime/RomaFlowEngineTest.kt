@@ -2,6 +2,9 @@ package me.matsumo.romaflow.core.ime
 
 import kotlinx.coroutines.test.runTest
 import me.matsumo.romaflow.core.morphology.HomophoneDictionary
+import me.matsumo.romaflow.core.morphology.LexemeMatch
+import me.matsumo.romaflow.core.morphology.ReadingLexicon
+import me.matsumo.romaflow.core.morphology.ZeroConnectionCostProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -153,7 +156,13 @@ class RomaFlowEngineTest {
     @Test
     fun convert_sendsEmptyPrefixContextAndFullReadingWhenNoLock() = runTest {
         val recording = RecordingConversionProvider()
-        val engine = RomaFlowEngine(recording, FakeSegmenter(), FakeAligner())
+        val engine = RomaFlowEngine(
+            conversionProvider = recording,
+            segmenter = FakeSegmenter(),
+            aligner = FakeAligner(),
+            readingLexicon = NoEntryReadingLexicon,
+            connectionCostProvider = ZeroConnectionCostProvider,
+        )
         engine.inputRomaji("nihongo")
 
         engine.convert()
@@ -711,10 +720,12 @@ class RomaFlowEngineTest {
             ),
         )
         val engine = RomaFlowEngine(
-            FakeConversionProvider(),
-            WATASHI_TENKI_SEGMENTER,
-            FakeAligner(),
-            dictionary,
+            conversionProvider = FakeConversionProvider(),
+            segmenter = WATASHI_TENKI_SEGMENTER,
+            aligner = FakeAligner(),
+            homophoneDictionary = dictionary,
+            readingLexicon = NoEntryReadingLexicon,
+            connectionCostProvider = ZeroConnectionCostProvider,
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -739,10 +750,12 @@ class RomaFlowEngineTest {
             ),
         )
         val engine = RomaFlowEngine(
-            FakeConversionProvider(),
-            WATASHI_TENKI_SEGMENTER,
-            FakeAligner(),
-            dictionary,
+            conversionProvider = FakeConversionProvider(),
+            segmenter = WATASHI_TENKI_SEGMENTER,
+            aligner = FakeAligner(),
+            homophoneDictionary = dictionary,
+            readingLexicon = NoEntryReadingLexicon,
+            connectionCostProvider = ZeroConnectionCostProvider,
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -782,10 +795,12 @@ class RomaFlowEngineTest {
             ),
         )
         val engine = RomaFlowEngine(
-            FakeConversionProvider(),
-            WATASHI_TENKI_SEGMENTER,
-            FakeAligner(),
-            dictionary,
+            conversionProvider = FakeConversionProvider(),
+            segmenter = WATASHI_TENKI_SEGMENTER,
+            aligner = FakeAligner(),
+            homophoneDictionary = dictionary,
+            readingLexicon = NoEntryReadingLexicon,
+            connectionCostProvider = ZeroConnectionCostProvider,
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -820,18 +835,25 @@ class RomaFlowEngineTest {
     @Test
     fun reconvert_sendsTailReadingAndLockedPrefixContextToProvider() = runTest {
         val recording = RecordingConversionProvider()
-        val engine = RomaFlowEngine(recording, RECONVERT_SEGMENTER, FakeAligner())
+        val engine = RomaFlowEngine(
+            conversionProvider = recording,
+            segmenter = RECONVERT_SEGMENTER,
+            aligner = FakeAligner(),
+            readingLexicon = NoEntryReadingLexicon,
+            connectionCostProvider = ZeroConnectionCostProvider,
+        )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
 
-        // segment 0 を渡しで確定（0..0 Locked）してから 2 回目の変換を発火する。
-        engine.moveSelectionLeft()
-        engine.moveSelectionLeft()
+        // OOV fallback では "わたしてんき"（6文字）が 1 文字ずつ 6 segment に分割される。
+        // ← x6 で末尾（き=index 5）から先頭（わ=index 0）へ移動して segment 0 のみを確定。
+        // lockEnd = max(-1, 0) = 0 → index 0 のみ Locked、prefixEnd=1、tail="たしてんき"。
+        repeat(6) { engine.moveSelectionLeft() }
         engine.confirmCandidate("渡し")
         engine.convert()
 
         val request = requireNotNull(recording.lastRequest)
-        assertEquals("てんき", request.readingInput)
+        assertEquals("たしてんき", request.readingInput)
         assertEquals("渡し", request.prefixContext)
     }
 
@@ -876,16 +898,28 @@ class RomaFlowEngineTest {
     @Test
     fun reconvert_afterOrphanRevertReconvertsWholeInput() = runTest {
         val recording = RecordingConversionProvider()
-        val engine = RomaFlowEngine(recording, RECONVERT_SEGMENTER, FakeAligner())
+        val engine = RomaFlowEngine(
+            conversionProvider = recording,
+            segmenter = RECONVERT_SEGMENTER,
+            aligner = FakeAligner(),
+            readingLexicon = NoEntryReadingLexicon,
+            connectionCostProvider = ZeroConnectionCostProvider,
+        )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
+
+        // OOV fallback で 6 segment（1文字ずつ）が生成される。
+        // まず末尾 segment（き=index 5）を確定 → lockEnd=5 → 0〜5 全 Locked。
         engine.moveSelectionLeft()
         engine.confirmCandidate("転機")
-        engine.moveSelectionLeft()
-        engine.moveSelectionLeft()
+
+        // ← x6 で None→5→4→3→2→1→0 と index 0（わ）へ移動して per-segment revert。
+        // enforceLeadingLockedPrefix が index 1〜5 の孤立 Locked を Converted へ降格させる。
+        // これで lockedPrefixSegments() が空になり、lockedPrefix は空＝tail は全文になる。
+        repeat(6) { engine.moveSelectionLeft() }
         engine.deleteBackward()
 
-        // 孤立 Locked が無いので lockedPrefix は空＝tail は全文。再変換で全体が再変換対象になる。
+        // lockedPrefix が空 → tail は全文。再変換で全体が再変換対象になる。
         engine.convert()
 
         val request = requireNotNull(recording.lastRequest)
@@ -932,7 +966,13 @@ class RomaFlowEngineTest {
     fun deleteBackward_thenConvert_sendsDeletedReadingToProvider() = runTest {
         // deleteBackward 後に convert を発火すると provider へ削除後の reading（"か"）が渡ること。
         val recording = RecordingConversionProvider()
-        val engine = RomaFlowEngine(recording, FakeSegmenter(), FakeAligner())
+        val engine = RomaFlowEngine(
+            conversionProvider = recording,
+            segmenter = FakeSegmenter(),
+            aligner = FakeAligner(),
+            readingLexicon = NoEntryReadingLexicon,
+            connectionCostProvider = ZeroConnectionCostProvider,
+        )
         engine.inputRomaji("kaki")
 
         engine.deleteBackward()
@@ -966,7 +1006,13 @@ class RomaFlowEngineTest {
         // revert は draft.input.readingInput を変えないため mismatch は起きないが、
         // finalize/convert 経路で readingInput が変わらないことを明示的に担保する。
         val recording = RecordingConversionProvider()
-        val engine = RomaFlowEngine(recording, WATASHI_TENKI_SEGMENTER, FakeAligner())
+        val engine = RomaFlowEngine(
+            conversionProvider = recording,
+            segmenter = WATASHI_TENKI_SEGMENTER,
+            aligner = FakeAligner(),
+            readingLexicon = NoEntryReadingLexicon,
+            connectionCostProvider = ZeroConnectionCostProvider,
+        )
         engine.inputRomaji("watashitenki")
         engine.applyConversion(engine.convert())
 
@@ -1035,9 +1081,37 @@ private val RECONVERT_SEGMENTER = MappedSegmenter(
     ),
 )
 
-/** FakeConversionProvider + 指定 [segmenter] + FakeAligner を注入したテスト用 [RomaFlowEngine]。 */
+/**
+ * FakeConversionProvider + 指定 [segmenter] + FakeAligner を注入したテスト用 [RomaFlowEngine]。
+ *
+ * A-5 cutover 後も [RomaFlowEngineTest] の不変条件テストが実辞書に依存しないよう、
+ * [NoEntryReadingLexicon] と [ZeroConnectionCostProvider] を注入する。
+ * 辞書なしで ProposalApplier を通すと OOV fallback（LiteralLexicon）が使われ、
+ * segment 化は legacy [buildTailSegments]（`FakeSegmenter` 使用）にフォールバックする。
+ * これにより A-5 以前のテスト期待値をそのまま維持できる。
+ * 実辞書による verified path の動作は [RomaFlowEngineCutoverIntegrationTest] で確認する。
+ */
 private fun newEngine(segmenter: Segmenter = FakeSegmenter()): RomaFlowEngine {
-    return RomaFlowEngine(FakeConversionProvider(), segmenter, FakeAligner())
+    return RomaFlowEngine(
+        conversionProvider = FakeConversionProvider(),
+        segmenter = segmenter,
+        aligner = FakeAligner(),
+        readingLexicon = NoEntryReadingLexicon,
+        connectionCostProvider = ZeroConnectionCostProvider,
+    )
+}
+
+/**
+ * エントリを返さないスタブ [ReadingLexicon]。
+ *
+ * OOV fallback（[me.matsumo.romaflow.core.morphology.LiteralLexicon]）のみで動作させ、
+ * [me.matsumo.romaflow.core.morphology.CompositeLexicon] が LiteralLexicon でアークを補完する。
+ * これにより ProposalApplier が verified path を見つけられず、legacy buildTailSegments fallback を使う。
+ * [RomaFlowEngineTest] の不変条件テストに実辞書ロードを持ち込まないために使う。
+ * ([RomaFlowEngineCutoverTest] に同名の object があるため別名を採用)
+ */
+private object NoEntryReadingLexicon : ReadingLexicon {
+    override fun commonPrefixSearch(reading: String, startOffset: Int): List<LexemeMatch> = emptyList()
 }
 
 /** convert() の結果を applyConversion() で反映するテスト用ヘルパー。 */
