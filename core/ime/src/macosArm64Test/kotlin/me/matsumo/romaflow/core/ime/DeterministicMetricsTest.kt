@@ -2,10 +2,11 @@ package me.matsumo.romaflow.core.ime
 
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.LexemeEntry
 import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
 import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
+import me.matsumo.romaflow.core.morphology.isLiteralFallbackArc
+import kotlin.math.roundToInt
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -17,16 +18,15 @@ import kotlin.test.assertTrue
  *   完全経路を返せる割合。
  * - **oracle N-best recall**: expectedSurface が [ReadingLatticeDecoder.nBest] の表層集合に現れる割合。
  * - **辞書のみ top-1 精度**: nBest 第1位の連結表層が expectedSurface と一致する割合。
- * - **境界変更被覆率**: BOUNDARY_CHANGE カテゴリで、期待分割に一致する完全経路が格子上に存在する割合。
- * - **OOV / literal fallback 率**: PROPER_NOUN / ASCII_DIGIT_SYMBOL で literal/OOV arc に依存した割合。
+ * - **境界変更被覆率**: BOUNDARY_CHANGE カテゴリで、期待分割を連結した全体表層への完全経路が
+ *   格子上に存在する割合（per-segment の厳密境界チェックは A-5 以降に延期）。
+ * - **OOV / literal fallback 率**: PROPER_NOUN / ASCII_DIGIT_SYMBOL で
+ *   [isLiteralFallbackArc] が真となる arc に依存した割合。
  *
  * assert は緩い下限に留め（例: recall/coverage が一定%以上）、gold ズレで脆くしない。
  * 数値の主目的は println によるレポート出力である。
  */
 class DeterministicMetricsTest {
-
-    /** LITERAL fallback の閾値 wcost（LiteralLexicon.HIRAGANA_WCOST = 8000）。 */
-    private val literalWcostThreshold = 8000
 
     /**
      * NORMAL カテゴリの lattice coverage・oracle N-best recall・辞書のみ top-1 精度をレポートする。
@@ -97,11 +97,17 @@ class DeterministicMetricsTest {
     }
 
     /**
-     * BOUNDARY_CHANGE カテゴリの境界変更被覆率をレポートする。
+     * BOUNDARY_CHANGE カテゴリの分割表層到達可能率をレポートする。
      *
-     * 期待分割（[CorpusEntry.expectedSegmentation]）に一致する格子経路が存在する割合を計測する。
+     * [CorpusEntry.expectedSegmentation] の各 segment を連結した全体表層に対して
+     * [ReadingLatticeDecoder.findMinCostPathForSurface] が経路を返せる割合を計測する。
+     *
+     * 実装の注意: 格子探索は全体表層の reachability を確認するのみで、per-segment の
+     * 厳密な境界一致（各 segment が独立した lexeme に対応するかどうか）は検証していない。
+     * per-segment の厳密チェックは A-5 以降に延期する。
+     *
      * 下限 assert:
-     * - 境界変更被覆率 >= 50%
+     * - 分割表層到達可能率 >= 50%
      */
     @Test
     fun boundaryChangeCategoryDeterministicMetrics() {
@@ -112,11 +118,12 @@ class DeterministicMetricsTest {
         val entriesWithSegmentation = corpus.filter { it.expectedSegmentation.isNotEmpty() }
         var segmentationCoveredCount = 0
 
-        println("=== BOUNDARY_CHANGE: 境界変更被覆率レポート ===")
+        println("=== BOUNDARY_CHANGE: 分割表層到達可能率レポート ===")
+        println("  (期待分割を連結した全体表層が格子上で完全経路として到達可能かを確認。per-segment 厳密チェックは A-5 以降)")
 
         for (entry in entriesWithSegmentation) {
             val segmentationSurface = entry.expectedSegmentation.joinToString("")
-            val isCovered = checkSegmentationCoverage(
+            val isCovered = checkSegmentationSurfaceCoverage(
                 reading = entry.reading,
                 segmentation = entry.expectedSegmentation,
                 lexicon = lexicon,
@@ -137,11 +144,11 @@ class DeterministicMetricsTest {
             segmentationCoveredCount.toDouble() / entriesWithSegmentation.size
         }
 
-        println("  境界変更被覆率: ${formatPercent(coverageRate)} ($segmentationCoveredCount/${entriesWithSegmentation.size})")
+        println("  分割表層到達可能率: ${formatPercent(coverageRate)} ($segmentationCoveredCount/${entriesWithSegmentation.size})")
 
         assertTrue(
             coverageRate >= 0.50,
-            "BOUNDARY_CHANGE 境界変更被覆率が 50% 以上であること（実際: ${formatPercent(coverageRate)}）",
+            "BOUNDARY_CHANGE 分割表層到達可能率が 50% 以上であること（実際: ${formatPercent(coverageRate)}）",
         )
     }
 
@@ -149,7 +156,7 @@ class DeterministicMetricsTest {
      * PROPER_NOUN カテゴリの OOV / literal fallback 率をレポートする。
      *
      * IPADIC に収録されている固有名詞と OOV（辞書外語）の両方を含む corpus で、
-     * literal fallback に依存した割合を計測する。
+     * [isLiteralFallbackArc] が真となる arc に依存した top-1 経路の割合を計測する。
      * assert は設けず、レポートのみ（PROPER_NOUN の OOV 率は gold 設計に依存するため）。
      */
     @Test
@@ -172,7 +179,7 @@ class DeterministicMetricsTest {
             )
 
             val top1Path = paths.firstOrNull()?.second ?: emptyList()
-            val hasLiteralArc = checkHasLiteralArc(top1Path)
+            val hasLiteralArc = top1Path.any { isLiteralFallbackArc(it) }
 
             if (hasLiteralArc) literalFallbackCount++
 
@@ -191,7 +198,7 @@ class DeterministicMetricsTest {
     /**
      * ASCII_DIGIT_SYMBOL カテゴリの literal fallback 率をレポートする。
      *
-     * ASCII・数字・記号が混在する reading では literal fallback が多用されることを確認する。
+     * ASCII・数字・記号が混在する reading では [isLiteralFallbackArc] が真となる arc が多用されることを確認する。
      * 下限 assert: literal fallback 率 >= 50%（ASCII/数字混在では literal が必ず使われる）。
      */
     @Test
@@ -214,7 +221,7 @@ class DeterministicMetricsTest {
             )
 
             val top1Path = paths.firstOrNull()?.second ?: emptyList()
-            val hasLiteralArc = checkHasLiteralArc(top1Path)
+            val hasLiteralArc = top1Path.any { isLiteralFallbackArc(it) }
 
             if (hasLiteralArc) literalFallbackCount++
 
@@ -238,25 +245,27 @@ class DeterministicMetricsTest {
     /**
      * 全カテゴリを横断した決定論指標サマリをレポートする。
      *
-     * カテゴリ別レポートを一覧表示する。各カテゴリの assert は個別テストが担うため
-     * このテスト自体には厳しい assert を設けない。
+     * NORMAL / HOMOPHONE / BOUNDARY_CHANGE は coverage・recall・top-1 精度を、
+     * PROPER_NOUN / ASCII_DIGIT_SYMBOL は OOV / literal fallback 率をレポートする。
+     * 各カテゴリの assert は個別テストが担うため、このテスト自体には厳しい assert を設けない。
      */
     @Test
     fun allCategoriesSummaryReport() {
         val lexicon = IpadicReadingLexicon()
         val costProvider = MomijiConnectionCostProvider.load()
+        val compositeLexicon = buildReadingLexiconWithFallback(lexicon)
 
         println("=== A-0 全カテゴリ決定論指標サマリ ===")
         println("corpus 合計: ${EvaluationCorpus.all.size} 件")
         println()
 
-        val categories = listOf(
+        val coverageCategories = listOf(
             "NORMAL" to EvaluationCorpus.normal,
             "HOMOPHONE" to EvaluationCorpus.homophone,
             "BOUNDARY_CHANGE" to EvaluationCorpus.boundaryChange,
         )
 
-        for ((label, corpus) in categories) {
+        for ((label, corpus) in coverageCategories) {
             val result = measureCoverageRecallTop1(
                 corpus = corpus,
                 lexicon = lexicon,
@@ -268,7 +277,30 @@ class DeterministicMetricsTest {
             printCategoryReport(label, result, corpus.size)
         }
 
-        println("(PROPER_NOUN / ASCII_DIGIT_SYMBOL は個別テストで OOV/literal fallback 率を計測)")
+        val fallbackCategories = listOf(
+            "PROPER_NOUN" to EvaluationCorpus.properNoun,
+            "ASCII_DIGIT_SYMBOL" to EvaluationCorpus.asciiDigitSymbol,
+        )
+
+        for ((label, corpus) in fallbackCategories) {
+            val fallbackCount = corpus.count { entry ->
+                val paths = ReadingLatticeDecoder.nBest(
+                    reading = entry.reading,
+                    lexicon = compositeLexicon,
+                    costProvider = costProvider,
+                    n = 1,
+                )
+                val top1Path = paths.firstOrNull()?.second ?: emptyList()
+
+                top1Path.any { isLiteralFallbackArc(it) }
+            }
+
+            val fallbackRate = if (corpus.isEmpty()) 0.0 else fallbackCount.toDouble() / corpus.size
+
+            println()
+            println("--- $label (n=${corpus.size}) ---")
+            println("  OOV/literal fallback 率: ${formatPercent(fallbackRate)} ($fallbackCount/${corpus.size})")
+        }
 
         // サマリテストは常に通過（レポート目的）
         assertTrue(true, "サマリレポートは常に通過")
@@ -293,7 +325,8 @@ class DeterministicMetricsTest {
     /**
      * corpus に対して lattice coverage / oracle N-best recall / 辞書のみ top-1 を計測する。
      *
-     * [categoryLabel] はログ出力用。詳細な per-entry ログは println で出力する。
+     * [categoryLabel] は per-entry ログのヘッダラベルとして println に使用する。
+     * 詳細な per-entry ログは println で出力する。
      */
     private fun measureCoverageRecallTop1(
         corpus: List<CorpusEntry>,
@@ -354,14 +387,13 @@ class DeterministicMetricsTest {
     }
 
     /**
-     * [segmentation] が示す分割通りの完全経路が格子上に存在するかを確認する。
+     * [segmentation] の各 segment を連結した全体表層への完全経路が格子上に存在するかを確認する。
      *
-     * 各 segment surface を連結した完全表層と全体の reading に対して
-     * [ReadingLatticeDecoder.findMinCostPathForSurface] を呼び、経路が存在すれば true を返す。
-     * ただし segmentation の各 segment が独立した lexeme に対応している必要はなく、
-     * 連結表層での格子探索が成功するかどうかのみを検証する。
+     * [ReadingLatticeDecoder.findMinCostPathForSurface] で全体表層の reachability を確認する。
+     * per-segment の厳密な境界一致（各 segment が独立した lexeme に対応するかどうか）は
+     * 検証せず、A-5 以降に延期する。
      */
-    private fun checkSegmentationCoverage(
+    private fun checkSegmentationSurfaceCoverage(
         reading: String,
         segmentation: List<String>,
         lexicon: IpadicReadingLexicon,
@@ -379,20 +411,16 @@ class DeterministicMetricsTest {
     }
 
     /**
-     * パス（[LexemeEntry] のリスト）内に literal/OOV arc が含まれるかを確認する。
+     * Double を百分率文字列にフォーマットする（例: 0.75 → "75.0%"）。
      *
-     * [LiteralLexicon] の arc は wcost が [literalWcostThreshold] 以上に設定されている（最低 8000）。
-     * 辞書語の wcost はほぼ 8000 未満であるため、この閾値で判別できる。
+     * 小数第1位を四捨五入して表示する。
      */
-    private fun checkHasLiteralArc(path: List<LexemeEntry>): Boolean {
-        return path.any { it.wcost >= literalWcostThreshold }
-    }
-
-    /** Double を百分率文字列にフォーマットする（例: 0.75 → "75.0%"）。 */
     private fun formatPercent(value: Double): String {
-        val intPart = (value * 100.0).toLong()
-        val singleDecimal = (value * 1000.0).toLong() % 10
-        return "$intPart.$singleDecimal%"
+        val tenths = (value * 1000.0).roundToInt()
+        val intPart = tenths / 10
+        val fracPart = tenths % 10
+
+        return "$intPart.$fracPart%"
     }
 
     /**

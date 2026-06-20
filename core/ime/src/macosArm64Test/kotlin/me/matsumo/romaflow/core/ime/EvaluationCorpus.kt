@@ -238,6 +238,13 @@ object EvaluationCorpus {
      * IPADIC に収録されている固有名詞を使う。OOV（辞書外語）は literal fallback に依存する。
      * [expectedSurface] は辞書にある場合はその表層、OOV の場合は literal 素通し（ひらがな）。
      * OOV 率・literal fallback 率の計測が目的であり、top-1 正解を必ずしも期待しない。
+     *
+     * ## OOV gold の設計意図
+     * `でびっど` / `まいくろそふと` / `ぐーぐる` は literal fallback 素通しを期待して
+     * [expectedSurface] をひらがなにしているが、実際には IPADIC に `デビッド` / `マイクロソフト` が
+     * 収録されているため辞書語として変換される（[isLiteralFallbackArc] = false）。
+     * そのため literal fallback 率が設計意図より低く出ることがある。
+     * gold の修正は corpus 改定時に別途行う（現状は OOV 率の計測基盤整備が主目的）。
      */
     val properNoun: List<CorpusEntry> = listOf(
         // IPADIC に収録されている地名・人名
