@@ -4,7 +4,7 @@ import kotlinx.coroutines.runBlocking
 import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
 import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import kotlin.test.Test
-import kotlin.test.assertFalse
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -100,11 +100,15 @@ class RomaFlowEngineRerankIntegrationTest {
     }
 
     /**
-     * OOV（ASCII 英字）入力で literal 保持が機能することを確認する。
+     * OOV（ASCII 英字混じり）入力で literal arc が segment 表層として保持されることを確認する。
      *
-     * "ok" などの ASCII 入力は compositeLexicon の LiteralLexicon fallback で
-     * そのままの文字列が literal arc として格子に載る。
-     * rerank が -1 を返しても Viterbi 1位（literal 経路）で segment 化される。
+     * "ok" を inputRomaji すると romaji→kana 変換で "おk" になる。
+     * IPADIC には "おk" の辞書語が存在しないため LiteralLexicon fallback が働き、
+     * "お" と "k" の2 arc で格子が構築される（Viterbi 1位 = literal 経路）。
+     * rerank が -1 を返しても literal 経路の表層（"おk"）が preedit に反映されることを確認する。
+     *
+     * 注: `engine.inputRomaji("ok")` は "おk" を返す（"k" は孤立ローマ字として literal 保持）。
+     * この "k" が literal arc として格子に乗り、applyConversion 後の segmentText に現れることを検証する。
      */
     @Test
     fun rerank_oovAscii_literalPreserved() = runBlocking {
@@ -117,18 +121,27 @@ class RomaFlowEngineRerankIntegrationTest {
             connectionCostProviderFactory = { costProvider },
         )
 
-        // ASCII 入力は romaji→kana 変換を経由するが、IME は "ok" と入力すると "おk" 等になる。
-        // ここでは純 ASCII 読みが literal として扱われるかを確認するため直接 ASCII reading を与える。
-        // engine.inputRomaji("ok") は "ok" → "おk" に変換されるため、convertResult は空にならない。
-        engine.inputRomaji("ok")
+        val preeditAfterInput = engine.inputRomaji("ok")
+
+        // "ok" → "おk"（孤立 "k" が literal 保持されること）
+        assertEquals("おk", preeditAfterInput, "romaji→kana 変換で 'ok' が 'おk' になること")
 
         val convertResult = engine.convert()
 
-        // convert() は空でなく何らかの文字列を返すこと（literal fallback が機能していること）
-        // rerank が -1 を返しても Viterbi 1位が採用されること
-        assertFalse(
-            convertResult.isEmpty() && engine.segmentCount() == 0,
-            "OOV ASCII 入力でも変換が完了すること",
+        // rerank -1 → Viterbi 1位（literal 経路）= "おk"
+        assertTrue(convertResult.isNotEmpty(), "convert() が空でないこと（実際: '$convertResult'）")
+
+        engine.applyConversion(convertResult)
+
+        // segment が生成され、"k" が literal として含まれること
+        assertTrue(engine.isConverted(), "isConverted=true になること")
+        assertTrue(engine.segmentCount() >= 1, "segment が最低1つ生成されること")
+
+        // 全 segment の surface を連結して "k" が保持されていることを確認する
+        val allSurfaces = (0 until engine.segmentCount()).joinToString("") { index -> engine.segmentText(index) }
+        assertTrue(
+            allSurfaces.contains("k"),
+            "literal 'k' が segment 表層に保持されること（実際の全 surface: '$allSurfaces'）",
         )
     }
 }
