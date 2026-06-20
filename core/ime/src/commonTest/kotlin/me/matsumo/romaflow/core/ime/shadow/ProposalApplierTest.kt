@@ -323,6 +323,67 @@ class ProposalApplierTest {
 
     // endregion
 
+    // region: N-best top-16 圏外の surface でも格子上に在れば採用される
+
+    /**
+     * N-best top-16 に入らなくても格子上に完全経路が存在する surface は採用されることを確認する。
+     *
+     * 同一 reading に対して distinct surface の lexeme を 17 件用意し、
+     * wcost を 0..16 と設定する（wcost が大きいほど辞書コスト上位から遠い）。
+     * target surface を wcost=16（最大 = N-best top-16 圏外）にする。
+     *
+     * [findMinCostPathForSurface] はこの target を見つけられるが、
+     * 旧来の rankAllCandidates(n=16) ではベスト16が wcost 0..15 で埋まるため target が現れない。
+     * applier が target を preferredSurface にした [ResolutionProposal.ProposeJointCorrection] を
+     * 受け取ったとき、no-op にならず target surface を採用することを assert する。
+     */
+    @Test
+    fun preferredSurfaceOutsideNBestTop16IsAdopted() {
+        // wcost 0..16 の 17 件の lexeme。surface は "表層0"〜"表層16"。target は "表層16"（wcost 最大）。
+        val surfaces = (0..16).map { index -> "表層$index" }
+        val lexemes = surfaces.mapIndexed { index, surface ->
+            LexemeEntry(
+                surface = surface,
+                reading = "ア",
+                lcAttr = 0,
+                rcAttr = 0,
+                posId = 0,
+                wcost = index * 100,
+            )
+        }
+        val targetSurface = "表層16" // wcost=1600 = 17 件中最大 → N-best top-16 に入らない
+
+        val lexicon = MultiLexemeOnReadingLexicon(reading = "あ", lexemes = lexemes)
+        val applier = buildApplier(lexicon = lexicon)
+        val state = buildEmptyConvertedState(reading = "あ")
+        val request = buildRequest(state)
+
+        val result = applier.apply(
+            proposal = ResolutionProposal.ProposeJointCorrection(
+                sourceSpan = SourceSpan(0, 1),
+                intendedReading = "あ",
+                preferredSurface = targetSurface,
+            ),
+            request = request,
+            state = state,
+            currentInputRevision = 0,
+            currentGraphRevision = 0,
+            currentCandidatePackDigest = 0,
+        )
+
+        assertTrue(result.isConverted, "top-16 圏外でも格子上に在れば変換済みになること")
+
+        val selectedPath = result.graph.pathOrNull(requireNotNull(result.selectedPathId))
+
+        assertNotNull(selectedPath, "selectedPath が取得できること")
+
+        val surface = buildSurface(selectedPath)
+
+        assertEquals(targetSurface, surface, "N-best top-16 圏外の target surface が採用されること")
+    }
+
+    // endregion
+
     // region: cross-hypothesis 不変条件
 
     /**
@@ -425,6 +486,31 @@ class ProposalApplierTest {
     }
 
     // endregion
+}
+
+/**
+ * テスト用: 指定した reading に対して複数の lexeme を返す [ReadingLexicon]。
+ *
+ * [reading] に完全一致する位置から始まる substring が [reading] と一致するときに
+ * [lexemes] の全件を返す。同一 reading に対して distinct surface の lexeme を
+ * 多数注入したいテストで使用する（N-best top-16 圏外テスト等）。
+ */
+private class MultiLexemeOnReadingLexicon(
+    private val reading: String,
+    private val lexemes: List<LexemeEntry>,
+) : ReadingLexicon {
+
+    override fun commonPrefixSearch(reading: String, startOffset: Int): List<LexemeMatch> {
+        val endOffset = startOffset + this.reading.length
+
+        if (endOffset > reading.length) return emptyList()
+
+        val slice = reading.substring(startOffset, endOffset)
+
+        if (slice != this.reading) return emptyList()
+
+        return lexemes.map { lexeme -> LexemeMatch(readingEndOffset = endOffset, lexeme = lexeme) }
+    }
 }
 
 /**

@@ -253,9 +253,23 @@ class A4ResolverComparisonTest {
         return builder.toString()
     }
 
+    /**
+     * reading から実辞書・実 costProvider で [CompositionGraph] を構築した [CompositionState] を返す。
+     *
+     * graph を空にしないことで [TwoStepToolLoopResolver.checkNeedsSecondPass] の
+     * `existsInGraph` チェックが正しく機能し、条件付き 2 往復の挙動が計測できる。
+     */
     private fun buildStateWithReading(reading: String): CompositionState {
+        val graph = CompositionGraph.build(
+            reading = reading,
+            lexicon = lexicon,
+            costProvider = costProvider,
+        )
+
         return CompositionState.empty().copy(
             source = CompositionSource.withFrozenPrefix(frozenPrefix = reading, revision = 0),
+            graph = graph,
+            selectedPathId = if (graph.allPathIds.isNotEmpty()) CompositionGraph.PathId(0) else null,
         )
     }
 

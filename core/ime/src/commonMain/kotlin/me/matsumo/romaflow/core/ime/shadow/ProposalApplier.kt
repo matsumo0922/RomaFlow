@@ -4,6 +4,7 @@ import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.CrossHypothesisDecoder
 import me.matsumo.romaflow.core.morphology.LexemeEntry
 import me.matsumo.romaflow.core.morphology.ReadingHypothesis
+import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
 import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
 
@@ -131,7 +132,7 @@ internal class ProposalApplier(
      * 3. LLM 提案 reading を active span 全体へ splice（§3.2）
      * 4. [ReadingHypothesis] を生成（LLM 提案 + 無修正の2仮説）
      * 5. OOV fallback 付き格子（[buildReadingLexiconWithFallback]）で cross-hypothesis 比較
-     * 6. preferredSurface が非 null の場合、格子上に一致する完全経路を探索（複数一致は最小コスト）
+     * 6. preferredSurface が非 null の場合、各仮説に対して N-best cap に依存しない格子全体の完全経路探索を行う（複数仮説横断 argmin）
      * 7. 検証済み経路を [CompositionGraph] に包み selectedPathId と graph を原子的に交換
      * 8. preferredSurface に到達できる経路が存在しない場合は no-op（捏造不採用）
      */
@@ -237,10 +238,15 @@ internal class ProposalApplier(
     /**
      * preferredSurface が指定された場合の適用。
      *
-     * 全仮説の N-best 経路を横断して preferredSurface に完全一致する経路を探す。
-     * 複数一致の場合は最小コスト経路を採用（§7）。
-     * 一致経路が存在しない場合は no-op（捏造不採用）。
+     * N-best top-N に依存せず、各仮説の reading に対して [ReadingLatticeDecoder.findMinCostPathForSurface]
+     * を用いて格子全体の完全経路探索を行う。これにより辞書コスト上 top-N 圏外の経路でも
+     * surface 制約で一致する経路が存在すれば採用できる（「格子上に無ければ不採用」が実態と一致）。
      *
+     * 複数仮説で一致した場合は `findMinCostPathForSurface のコスト + typingCost` が最小の仮説を採用（§7 argmin）。
+     * これは cross-hypothesis 不変条件（§3.2/§7）を満たす: 各仮説で surface 探索 → typingCost 加算 →
+     * 全仮説横断 argmin で最終選択、という横断 argmin を実現している。
+     *
+     * 全仮説で一致経路が存在しない場合は no-op（捏造不採用）。
      * preferredSurface が見つかった場合は新しい [CompositionGraph] を包んで
      * graph と selectedPathId を原子的に交換する。
      */
@@ -251,32 +257,39 @@ internal class ProposalApplier(
         compositeLexicon: ReadingLexicon,
     ): CompositionState {
         val preferredSurface = requireNotNull(proposal.preferredSurface)
-        val nBestCount = CROSS_HYPOTHESIS_N_BEST
 
-        val allRanked = CrossHypothesisDecoder.rankAllCandidates(
-            hypotheses = hypotheses,
-            lexicon = compositeLexicon,
-            costProvider = costProvider,
-            n = nBestCount,
-        )
+        // 各仮説で surface 制約付き完全経路探索を行い、(totalCost+typingCost, hypothesis, path) を集める
+        var bestTotalCost = Long.MAX_VALUE
+        var bestHypothesis: ReadingHypothesis? = null
+        var bestPath: List<LexemeEntry>? = null
 
-        // preferredSurface に完全一致する候補を cost 昇順で検索
-        val matchedEntry = allRanked.firstOrNull { triple ->
-            buildSurface(triple.third) == preferredSurface
+        for (hypothesis in hypotheses) {
+            val found = ReadingLatticeDecoder.findMinCostPathForSurface(
+                reading = hypothesis.reading,
+                surface = preferredSurface,
+                lexicon = compositeLexicon,
+                costProvider = costProvider,
+            )
+
+            if (found == null) continue
+
+            val (decodeCost, path) = found
+            val combined = decodeCost + hypothesis.typingCost.toLong()
+
+            if (combined < bestTotalCost) {
+                bestTotalCost = combined
+                bestHypothesis = hypothesis
+                bestPath = path
+            }
         }
 
-        if (matchedEntry == null) {
+        if (bestHypothesis == null || bestPath == null) {
             // preferredSurface が格子上に存在しない → 捏造不採用
             return state
         }
 
-        // hypothesis.reading（ひらがな）を graph.reading として使う。
-        // buildReadingFromPath はカタカナを返すため使用しない（should-1 修正）。
-        val matchedTotalCost = matchedEntry.first
-        val matchedHypothesis = matchedEntry.second
-        val matchedPath = matchedEntry.third
-
-        return rebuildGraphWithPath(state, matchedHypothesis.reading, matchedPath, matchedTotalCost)
+        // hypothesis.reading（ひらがな）を graph.reading として使う（should-1 統一維持）。
+        return rebuildGraphWithPath(state, bestHypothesis.reading, bestPath, bestTotalCost)
     }
 
     /**
@@ -337,8 +350,5 @@ internal class ProposalApplier(
     private companion object {
         /** LLM が reading を変更した場合に加えるタイピングコストのデフォルトペナルティ。 */
         const val DEFAULT_LLM_TYPING_COST_PENALTY = 5_000
-
-        /** cross-hypothesis 比較で生成する N-best の件数。 */
-        const val CROSS_HYPOTHESIS_N_BEST = 16
     }
 }
