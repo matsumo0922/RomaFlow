@@ -39,8 +39,8 @@ class RomaFlowEngineCutoverIntegrationTest {
             conversionProvider = provider,
             segmenter = TenkiSegmenter,
             aligner = DpReadingAligner(),
-            readingLexicon = lexicon,
-            connectionCostProvider = costProvider,
+            readingLexiconFactory = { lexicon },
+            connectionCostProviderFactory = { costProvider },
         )
 
         engine.inputRomaji("tenki")
@@ -65,8 +65,8 @@ class RomaFlowEngineCutoverIntegrationTest {
             conversionProvider = provider,
             segmenter = TenkiSegmenter,
             aligner = DpReadingAligner(),
-            readingLexicon = lexicon,
-            connectionCostProvider = costProvider,
+            readingLexiconFactory = { lexicon },
+            connectionCostProviderFactory = { costProvider },
         )
 
         engine.inputRomaji("tenki")
@@ -99,8 +99,8 @@ class RomaFlowEngineCutoverIntegrationTest {
             conversionProvider = provider,
             segmenter = OovSegmenter(oovSurface),
             aligner = DpReadingAligner(),
-            readingLexicon = lexicon,
-            connectionCostProvider = costProvider,
+            readingLexiconFactory = { lexicon },
+            connectionCostProviderFactory = { costProvider },
         )
 
         engine.inputRomaji("tenki")
@@ -124,8 +124,8 @@ class RomaFlowEngineCutoverIntegrationTest {
             conversionProvider = EmptyConversionProvider,
             segmenter = TenkiSegmenter,
             aligner = DpReadingAligner(),
-            readingLexicon = lexicon,
-            connectionCostProvider = costProvider,
+            readingLexiconFactory = { lexicon },
+            connectionCostProviderFactory = { costProvider },
         )
 
         engine.inputRomaji("tenki")
@@ -148,8 +148,8 @@ class RomaFlowEngineCutoverIntegrationTest {
             conversionProvider = provider,
             segmenter = TenkiSegmenter,
             aligner = DpReadingAligner(),
-            readingLexicon = lexicon,
-            connectionCostProvider = costProvider,
+            readingLexiconFactory = { lexicon },
+            connectionCostProviderFactory = { costProvider },
         )
 
         engine.inputRomaji("tenki")

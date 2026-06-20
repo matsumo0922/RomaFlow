@@ -160,8 +160,8 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = FakeSegmenter(),
             aligner = FakeAligner(),
-            readingLexicon = NoEntryReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { NoEntryReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("nihongo")
 
@@ -724,8 +724,8 @@ class RomaFlowEngineTest {
             segmenter = WATASHI_TENKI_SEGMENTER,
             aligner = FakeAligner(),
             homophoneDictionary = dictionary,
-            readingLexicon = NoEntryReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { NoEntryReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -754,8 +754,8 @@ class RomaFlowEngineTest {
             segmenter = WATASHI_TENKI_SEGMENTER,
             aligner = FakeAligner(),
             homophoneDictionary = dictionary,
-            readingLexicon = NoEntryReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { NoEntryReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -799,8 +799,8 @@ class RomaFlowEngineTest {
             segmenter = WATASHI_TENKI_SEGMENTER,
             aligner = FakeAligner(),
             homophoneDictionary = dictionary,
-            readingLexicon = NoEntryReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { NoEntryReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -839,8 +839,8 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = RECONVERT_SEGMENTER,
             aligner = FakeAligner(),
-            readingLexicon = NoEntryReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { NoEntryReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -902,8 +902,8 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = RECONVERT_SEGMENTER,
             aligner = FakeAligner(),
-            readingLexicon = NoEntryReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { NoEntryReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -970,8 +970,8 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = FakeSegmenter(),
             aligner = FakeAligner(),
-            readingLexicon = NoEntryReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { NoEntryReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("kaki")
 
@@ -1010,8 +1010,8 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = WATASHI_TENKI_SEGMENTER,
             aligner = FakeAligner(),
-            readingLexicon = NoEntryReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { NoEntryReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
         engine.applyConversion(engine.convert())
@@ -1096,8 +1096,8 @@ private fun newEngine(segmenter: Segmenter = FakeSegmenter()): RomaFlowEngine {
         conversionProvider = FakeConversionProvider(),
         segmenter = segmenter,
         aligner = FakeAligner(),
-        readingLexicon = NoEntryReadingLexicon,
-        connectionCostProvider = ZeroConnectionCostProvider,
+        readingLexiconFactory = { NoEntryReadingLexicon },
+        connectionCostProviderFactory = { ZeroConnectionCostProvider },
     )
 }
 

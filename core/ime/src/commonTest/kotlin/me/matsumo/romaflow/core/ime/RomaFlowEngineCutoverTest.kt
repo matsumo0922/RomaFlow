@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
  * A-5 cutover の不変条件をテストで固定するテストクラス。
  *
  * 実辞書が必要な正常 cutover（verified path 経由）のテストは [macosArm64Test] 側に配置する。
- * こちらは実辞書不要な不変条件系（空 / stale / failure / pending finalization）を
+ * こちらは実辞書不要な不変条件系（空 / stale / failure / pending finalization / factory lazy 担保）を
  * スタブ [ReadingLexicon] と [ZeroConnectionCostProvider] で検証する。
  *
  * テストはすべて [RomaFlowEngine] の公開 API のみを通じて行い、
@@ -93,8 +93,8 @@ class RomaFlowEngineCutoverTest {
             conversionProvider = recording,
             segmenter = FakeSegmenter(),
             aligner = FakeAligner(),
-            readingLexicon = StubEmptyReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { StubEmptyReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         recordingEngine.inputRomaji("on")
 
@@ -114,8 +114,8 @@ class RomaFlowEngineCutoverTest {
             conversionProvider = failingProvider,
             segmenter = FakeSegmenter(),
             aligner = FakeAligner(),
-            readingLexicon = StubEmptyReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { StubEmptyReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("tenki")
 
@@ -135,8 +135,8 @@ class RomaFlowEngineCutoverTest {
             conversionProvider = provider,
             segmenter = WatashiTenkiSegmenter,
             aligner = FakeAligner(),
-            readingLexicon = StubEmptyReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { StubEmptyReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
         engine.applyConversion(engine.convert())
@@ -170,8 +170,8 @@ class RomaFlowEngineCutoverTest {
             conversionProvider = provider,
             segmenter = FakeSegmenter(),
             aligner = FakeAligner(),
-            readingLexicon = StubEmptyReadingLexicon,
-            connectionCostProvider = ZeroConnectionCostProvider,
+            readingLexiconFactory = { StubEmptyReadingLexicon },
+            connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("tenki")
         engine.applyConversion(engine.convert())
@@ -185,6 +185,43 @@ class RomaFlowEngineCutoverTest {
         assertEquals("ん", engine.segmentText(1))
         assertEquals("き", engine.segmentText(2))
     }
+
+    @Test
+    fun factory_isNotCalledOnEngineConstruction_onlyOnFirstApplyConversion() = runTest {
+        // engine 構築時に factory が評価されないこと（lazy 担保）を確認する。
+        // factory 呼び出し回数をカウンタで計測し、構築直後は 0・applyConversion() 後に 1 になることを assert する。
+        // readingLexicon / connectionCostProvider は applyConversion() 内の proposalApplier で初めて評価されるため。
+        var lexiconFactoryCallCount = 0
+        var costProviderFactoryCallCount = 0
+
+        val engine = RomaFlowEngine(
+            conversionProvider = FakeConversionProvider(),
+            segmenter = FakeSegmenter(),
+            aligner = FakeAligner(),
+            readingLexiconFactory = {
+                lexiconFactoryCallCount++
+                StubEmptyReadingLexicon
+            },
+            connectionCostProviderFactory = {
+                costProviderFactoryCallCount++
+                ZeroConnectionCostProvider
+            },
+        )
+
+        // engine 構築直後は factory が一度も呼ばれていないこと
+        assertEquals(0, lexiconFactoryCallCount, "engine 構築時に lexiconFactory が呼ばれないこと")
+        assertEquals(0, costProviderFactoryCallCount, "engine 構築時に costProviderFactory が呼ばれないこと")
+
+        // 入力後に convert() → applyConversion() を呼んで初回遅延初期化を促す。
+        // readingLexicon / connectionCostProvider は applyConversion() 内の proposalApplier 経由で初めて評価される。
+        engine.inputRomaji("tenki")
+        val convertResult = engine.convert()
+        engine.applyConversion(convertResult)
+
+        // applyConversion() 後は各 factory がそれぞれ 1 回だけ呼ばれていること
+        assertEquals(1, lexiconFactoryCallCount, "初回 applyConversion() 後に lexiconFactory が 1 回呼ばれること")
+        assertEquals(1, costProviderFactoryCallCount, "初回 applyConversion() 後に costProviderFactory が 1 回呼ばれること")
+    }
 }
 
 // ---- helpers ----
@@ -195,8 +232,8 @@ private fun newStubEngine(): RomaFlowEngine {
         conversionProvider = FakeConversionProvider(),
         segmenter = FakeSegmenter(),
         aligner = FakeAligner(),
-        readingLexicon = StubEmptyReadingLexicon,
-        connectionCostProvider = ZeroConnectionCostProvider,
+        readingLexiconFactory = { StubEmptyReadingLexicon },
+        connectionCostProviderFactory = { ZeroConnectionCostProvider },
     )
 }
 

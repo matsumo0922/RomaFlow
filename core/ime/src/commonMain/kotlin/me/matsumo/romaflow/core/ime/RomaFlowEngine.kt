@@ -31,9 +31,11 @@ import me.matsumo.romaflow.core.morphology.defaultConnectionCostProvider
  * 公開 API は Swift Export に合わせ String / Int / Boolean / suspend のみを受け渡しする（List は出さない）。
  *
  * ## A-5 cutover: lexicon / costProvider 注入
- * テスト注入用に internal constructor で [readingLexicon] と [connectionCostProvider] を受け取る。
+ * テスト注入用に internal constructor で [readingLexiconFactory] と [connectionCostProviderFactory] を受け取る。
  * public constructor は本番向けの [IpadicReadingLexicon] と [defaultConnectionCostProvider] を使う。
  * matrix ロード（重い）は初回 [convert] まで遅延するため、engine 構築時のレイテンシを避ける。
+ * factory はラムダとして渡され、[readingLexicon] / [connectionCostProvider] の by lazy フィールドで
+ * 初回 convert() 時に評価される。これにより engine 構築時点ではいかなるロードも走らない。
  *
  * ## スコープ外（follow-up）
  * inputRomaji / deleteBackward / candidates / lock / marked-text / Swift adapter の shadow 化、
@@ -44,8 +46,8 @@ class RomaFlowEngine internal constructor(
     private val segmenter: Segmenter,
     private val aligner: ReadingAligner,
     private val homophoneDictionary: HomophoneDictionary = EmptyHomophoneDictionary,
-    private val readingLexicon: ReadingLexicon = IpadicReadingLexicon(),
-    private val connectionCostProvider: ConnectionCostProvider = defaultConnectionCostProvider(),
+    private val readingLexiconFactory: () -> ReadingLexicon = ::IpadicReadingLexicon,
+    private val connectionCostProviderFactory: () -> ConnectionCostProvider = ::defaultConnectionCostProvider,
 ) {
 
     private val converter = RomajiKanaConverter()
@@ -79,8 +81,14 @@ class RomaFlowEngine internal constructor(
     // 実行中の call2 要求が発行されたときの candidateRequestId。結果適用時にこれが現在値と一致するか確認する。
     private var pendingCandidateRequestId = -1
 
+    // readingLexicon / connectionCostProvider は factory ラムダから遅延生成する。
+    // matrix ロードは重いため engine 構築時ではなく初回 convert() まで先送りする。
+    private val readingLexicon: ReadingLexicon by lazy { readingLexiconFactory() }
+
+    private val connectionCostProvider: ConnectionCostProvider by lazy { connectionCostProviderFactory() }
+
     // OOV fallback 付き格子（composite）・proposalApplier・legacyResolver は初回 convert() まで遅延して構築する。
-    // matrix ロードは重いため engine 構築時ではなくタイピング開始まで先送りする。
+    // readingLexicon / connectionCostProvider も lazy なので、こちらの初期化も自動的に遅延する。
     // legacyResolver は stateless なので 1 インスタンスを再利用する。
     private val compositeLexicon: ReadingLexicon by lazy { buildReadingLexiconWithFallback(readingLexicon) }
 
@@ -96,8 +104,9 @@ class RomaFlowEngine internal constructor(
     /**
      * Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner・IPADIC 辞書を使う constructor。
      *
-     * lexicon と costProvider は internal constructor のデフォルト引数（[IpadicReadingLexicon] /
-     * [defaultConnectionCostProvider]）が適用されるため省略する。
+     * lexicon / costProvider は internal constructor のデフォルト factory（`::IpadicReadingLexicon` /
+     * `::defaultConnectionCostProvider`）が適用されるため省略する。
+     * いずれも by lazy フィールドで初回 convert() まで遅延生成されるため、engine 構築コストはゼロ。
      */
     constructor() : this(
         conversionProvider = defaultConversionProvider(),
