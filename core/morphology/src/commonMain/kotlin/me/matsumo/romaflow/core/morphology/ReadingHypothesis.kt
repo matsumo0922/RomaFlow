@@ -9,8 +9,10 @@ package me.matsumo.romaflow.core.morphology
  *
  * A-2 では LLM の実呼び出しは行わず、deterministic な読み候補（または fake 候補）で検証する。
  * 実 LLM resolver は A-4 で実装する。
+ *
+ * `core:ime` の `ProposalApplier`（A-4）が `CrossHypothesisDecoder` 経由で使うため public に昇格する。
  */
-internal data class ReadingHypothesis(
+data class ReadingHypothesis(
     /** この仮説の読み（ひらがな）。 */
     val reading: String,
     /**
@@ -30,8 +32,12 @@ internal data class ReadingHypothesis(
  * タイピングコスト 0 の無修正 path と提案読みが自然に競合する。
  *
  * 用途: 複数入力候補の横断比較。A-4 以降では LLM が生成した読み仮説を渡す。
+ *
+ * `core:ime` の `ProposalApplier`（A-4）が使うため public に昇格する。
+ * cross-hypothesis 比較のロジックを hypothesis 内や呼び出し側に閉じて再実装することを禁止し、
+ * 必ずこのオブジェクトを経由させることで一貫性を保つ（§3.2 / goal file 制約）。
  */
-internal object CrossHypothesisDecoder {
+object CrossHypothesisDecoder {
 
     /**
      * cross-hypothesis 比較の結果。
