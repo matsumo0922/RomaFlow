@@ -79,8 +79,9 @@ class RomaFlowEngine internal constructor(
     // 実行中の call2 要求が発行されたときの candidateRequestId。結果適用時にこれが現在値と一致するか確認する。
     private var pendingCandidateRequestId = -1
 
-    // OOV fallback 付き格子（composite）と proposalApplier は初回 convert() まで遅延して構築する。
+    // OOV fallback 付き格子（composite）・proposalApplier・legacyResolver は初回 convert() まで遅延して構築する。
     // matrix ロードは重いため engine 構築時ではなくタイピング開始まで先送りする。
+    // legacyResolver は stateless なので 1 インスタンスを再利用する。
     private val compositeLexicon: ReadingLexicon by lazy { buildReadingLexiconWithFallback(readingLexicon) }
 
     private val proposalApplier: ProposalApplier by lazy {
@@ -89,6 +90,8 @@ class RomaFlowEngine internal constructor(
             costProvider = connectionCostProvider,
         )
     }
+
+    private val legacyResolver: LegacyFullTextResolver by lazy { LegacyFullTextResolver(conversionProvider) }
 
     /**
      * Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner・IPADIC 辞書を使う constructor。
@@ -206,7 +209,7 @@ class RomaFlowEngine internal constructor(
             graphRevision = 0,
             candidatePackDigest = 0,
         )
-        val proposal = LegacyFullTextResolver(conversionProvider).propose(request)
+        val proposal = legacyResolver.propose(request)
 
         return when (proposal) {
             is ResolutionProposal.ProposeJointCorrection -> proposal.preferredSurface.orEmpty()
@@ -239,6 +242,9 @@ class RomaFlowEngine internal constructor(
             preferredSurface = result,
         )
         val state = buildResolverState(readingInput, prefixEnd, prefixContext)
+        // revision を全て 0 で渡すのは意図的。stale 判定は live 層の pendingConversionRevision（冒頭の guard）が
+        // 担保しているため、ProposalApplier 内部の revision 比較は常に一致（no-op）にしてよい。
+        // 二重の revision 体系を作らず、live 層 1 箇所だけで stale を判定するための設計。
         val request = ResolutionRequest(
             state = state,
             inputRevision = 0,
@@ -1001,7 +1007,7 @@ class RomaFlowEngine internal constructor(
      * [fullReading] は readingInput 全体、[prefixEnd] は locked prefix の終端（0 = lock なし）、
      * [prefixContext] は locked prefix の surface 連結。[LegacyFullTextResolver] と [ProposalApplier]
      * は `state.pinnedConstraint.pinnedSurface`（prefixContext）と `lockedPrefixBoundary`（prefixEnd）
-     * のみを参照するため、synthetic な [me.matsumo.romaflow.core.morphology.LexemeEntry] で pinnedPath を埋める。
+     * のみを参照するため、synthetic な [LexemeEntry] で pinnedPath を埋める。
      * synthetic の連接 ID は不問（tail path の segment 化に pinnedPath は使わない）。
      * lock 跨ぎの厳密化は A-5 以降の follow-up（設計ドキュメント参照）。
      */
@@ -1030,7 +1036,7 @@ class RomaFlowEngine internal constructor(
     ): PinnedPathConstraint {
         // LegacyFullTextResolver が pinnedSurface と lockedPrefixBoundary のみを参照するため、
         // synthetic entry の連接 ID / posId / wcost は 0 で問題ない。
-        val syntheticLexeme = me.matsumo.romaflow.core.morphology.LexemeEntry(
+        val syntheticLexeme = LexemeEntry(
             surface = prefixContext,
             reading = fullReading.substring(0, prefixEnd.coerceIn(0, fullReading.length)),
             lcAttr = 0,
@@ -1081,7 +1087,7 @@ class RomaFlowEngine internal constructor(
      * reading cursor を 0 から進め、各 lexeme について surface・reading・TextRange を確定する。
      * lexeme の reading はカタカナだが文字数はひらがな mora 数と一致するため、[tailReading]（ひらがな）
      * を当該長さで切り出して reading とする。range は [offset] 分オフセットして readingInput 全体の絶対座標へ直す。
-     * [me.matsumo.romaflow.core.morphology.LexemeEntry.reading] の長さで切ると cursor が tailReading の長さを
+     * [LexemeEntry.reading] の長さで切ると cursor が tailReading の長さを
      * 超える場合は境界でクランプし、残りを 1 segment にまとめる。
      */
     private fun buildTailSegmentsFromPath(
