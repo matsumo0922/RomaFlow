@@ -18,6 +18,7 @@ naming:
   FunctionNaming:
     ignoreAnnotated:
       - 'Composable'
+      - 'Test'
   MatchingDeclarationName:
     active: false
   PackageNaming:

@@ -17,6 +17,16 @@ fun buildReadingLexiconWithFallback(primary: ReadingLexicon): ReadingLexicon {
 }
 
 /**
+ * プラットフォームに応じた連接コスト行列をロードして [ConnectionCostProvider] を返す public factory。
+ *
+ * macosArm64 は momiji IPADIC の base64 埋め込み行列、Android/JVM は classpath の
+ * `mecab-ipadic/matrix.bin` をそれぞれ `internal expect` の [loadConnectionMatrix] で取得する。
+ * ロードはコストが高いため、呼び出し側（[RomaFlowEngine] 等）は `by lazy` でキャッシュすること。
+ * `:core:morphology` は Swift Export を持たないため、この関数は Swift 側に出ない。
+ */
+fun defaultConnectionCostProvider(): ConnectionCostProvider = loadConnectionMatrix()
+
+/**
  * [entry] が [LiteralLexicon] 由来の fallback arc かどうかを厳密に判定する。
  *
  * [LiteralLexicon.buildLiteralLexeme] が生成する [LexemeEntry] と data class 等価比較を行うことで、
