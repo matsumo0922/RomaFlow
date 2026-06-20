@@ -92,18 +92,34 @@ object ReadingLatticeDecoder {
      * [reading]（ひらがな）と [surface]（表層形）の両方を完全にカバーする lexeme 列を格子上で探し、
      * 最小コスト経路を返す。見つからない場合は null を返す。
      *
-     * ## アルゴリズム（DAG 前向き DP）
-     * 状態を (readingOffset, surfaceOffset) として前向き DP を行う。
-     * lexeme は reading を 1 文字以上消費するため、readingOffset は単調増加する。
-     * これは DAG 前向き DP がトポロジカル順（readingOffset 昇順）で解けることを意味し、
-     * **連接コストが負でもこの前向き DP は厳密**（同一 readingOffset 内に後退辺がない）。
+     * ## アルゴリズム（Markov 前向き DP + surface 制約）
      *
-     * 各ノードを展開するのは surface の対応位置から始まる prefix が lexeme.surface と
-     * 一致するときのみで、surface 制約で探索を強く枝刈りする。
+     * ### DP 状態 (readingOffset, surfaceOffset, rcAttr)
+     * 連接コスト `transitionCost(prevRcAttr, nextLcAttr)` は直前ノードの rcAttr に依存する。
+     * rcAttr を状態に含めないと「prefix cost は高いが rcAttr の違いで下流連接が安い」経路を
+     * 誤って枝刈りし、真の最小コストを取りこぼす（反例: 以下）。
+     * よって DP 状態は `(readingOffset, surfaceOffset, rcAttr)` の3要素で構成し、
+     * 同一3要素ごとに prefix cost の最小値を保持する（Markov 最適原理）。
      *
-     * g コスト = BOS 連接 + 各 lexeme の (連接コスト + wcost) の累積 + EOS 連接。
-     * 状態ごとに最小 g とバックポインタを保持し、ゴール (reading.length, surface.length)
-     * に達したときに経路を復元する。
+     * 反例（rcAttr なしでは誤る）:
+     * ```
+     * A: surface"X" rc=1 wcost=0  ; B: surface"X" rc=2 wcost=10
+     * C: surface"Y" lc=3 wcost=0
+     * transitionCost(1,3)=+1000, transitionCost(2,3)=-1000, それ以外=0
+     * 真の最小コスト: B,C = 10-1000 = -990
+     * rcAttr を状態に持たないと: (1,"XY") で A を残し A,C = 1000 を誤って返す
+     * ```
+     *
+     * ### DAG トポロジカル順保証
+     * lexeme は reading を 1 文字以上消費するため `readingOffset` は遷移先で必ず増加する。
+     * `readingOffset` 昇順の外ループ内で「同一 readingOffset マップへの書き込み（後退辺）」が
+     * 発生しないため、前向き DP は負連接コストの下でも厳密に最小コストを求められる。
+     *
+     * ### ConcurrentModification 回避
+     * `dpTable` は `readingOffset → HashMap<Pair(surfaceOffset,rcAttr), DpValue>` の2層マップ。
+     * readingOffset ごとに独立したマップとし、ループ内では現在 offset のマップを読み取りのみ、
+     * 書き込みは必ず別（大きい）readingOffset のマップに行う。
+     * Kotlin/Native の `HashMap.EntryRef` がバッキングマップ変更後に CME を投げる問題を回避する。
      *
      * @param reading ひらがな reading（格子の主軸）
      * @param surface 探索する表層形（surface 制約）
@@ -119,35 +135,44 @@ object ReadingLatticeDecoder {
     ): Pair<Long, List<LexemeEntry>>? {
         if (reading.isEmpty() || surface.isEmpty()) return null
 
-        // DP テーブル: key = (readingOffset, surfaceOffset)、value = (minCost, prevKey, lexeme)
-        // prevKey と lexeme はバックポインタ用。
-        data class DpKey(val readingOffset: Int, val surfaceOffset: Int)
-        data class DpValue(
-            /** BOS〜このノード終端までの最小コスト（BOS 連接 + wcost + 語間連接の累積、EOS は含まない）。 */
-            val minCost: Long,
-            /** バックポインタ: このノードの始端状態。初期（BOS 起点）は null。 */
-            val prevKey: DpKey?,
-            /** このノードに対応する lexeme。BOS 起点（prevKey=null）では使用しない。 */
-            val lexeme: LexemeEntry?,
-            /** このノードの rcAttr（次の連接コスト計算に使用）。BOS 起点は BOS_EOS_CONTEXT_ID。 */
+        /**
+         * DP 状態の識別子。
+         *
+         * [readingOffset] と [surfaceOffset] に加え [rcAttr] を含む（Markov 境界 context）。
+         * rcAttr が異なる状態は連接コストが異なるため独立して最小コストを追跡する。
+         */
+        data class DpKey(
+            val readingOffset: Int,
+            val surfaceOffset: Int,
             val rcAttr: Int,
         )
 
-        // DP テーブル: readingOffset → (surfaceOffset → DpValue) の2層マップ。
-        // Kotlin/Native の HashMap.EntryRef はバッキングマップ変更後に key/value へのアクセスで
-        // ConcurrentModificationException を投げるため、各 readingOffset の状態を別マップで管理し
-        // イテレーション中に別 readingOffset のエントリを書き換えても互いに干渉しないようにする。
-        val dpTable = HashMap<Int, HashMap<Int, DpValue>>()
+        /**
+         * DP テーブルの1エントリ。
+         *
+         * [minCost] = BOS〜この状態終端までの最小 prefix コスト（EOS 連接コストは含まない）。
+         * [prevKey] と [lexeme] はバックポインタ（経路復元用）。
+         */
+        data class DpValue(
+            val minCost: Long,
+            val prevKey: DpKey?,
+            val lexeme: LexemeEntry?,
+        )
 
-        // BOS 初期状態: readingOffset=0, surfaceOffset=0
-        dpTable.getOrPut(0) { HashMap() }[0] = DpValue(
+        // 外層キー: readingOffset。内層キー: (surfaceOffset, rcAttr) のペア。
+        // 分離理由: 現在 readingOffset のマップを読み取りながら、より大きい readingOffset の
+        // マップにだけ書き込むことで CME を回避する（DAG 性によりこれは常に成立）。
+        val dpTable = HashMap<Int, HashMap<Pair<Int, Int>, DpValue>>()
+
+        // BOS 初期状態: readingOffset=0, surfaceOffset=0, rcAttr=BOS_EOS_CONTEXT_ID
+        val bosInnerKey = Pair(0, BOS_EOS_CONTEXT_ID)
+        dpTable.getOrPut(0) { HashMap() }[bosInnerKey] = DpValue(
             minCost = 0L,
             prevKey = null,
             lexeme = null,
-            rcAttr = BOS_EOS_CONTEXT_ID,
         )
 
-        // readingOffset 昇順でトポロジカルに処理（DAG 前向き DP）
+        // readingOffset 昇順でトポロジカルに処理
         for (readingOffset in 0 until reading.length) {
             val statesAtOffset = dpTable[readingOffset] ?: continue
             val candidates = lexicon.commonPrefixSearch(reading, readingOffset)
@@ -157,8 +182,9 @@ object ReadingLatticeDecoder {
                 val lexemeSurface = lexeme.surface
                 val newReadingOffset = match.readingEndOffset
 
-                // statesAtOffset は読み取りのみ。別 readingOffset のマップを書き換えるので競合なし。
-                for ((surfaceOffset, dpValue) in statesAtOffset) {
+                // statesAtOffset は読み取りのみ。書き込み先は newReadingOffset > readingOffset なので CME なし。
+                for ((innerKey, dpValue) in statesAtOffset) {
+                    val (surfaceOffset, prevRcAttr) = innerKey
                     val surfaceEnd = surfaceOffset + lexemeSurface.length
 
                     // surface 制約: surface[surfaceOffset..surfaceEnd) が lexeme.surface と一致するか
@@ -168,49 +194,77 @@ object ReadingLatticeDecoder {
 
                     if (surfaceSlice != lexemeSurface) continue
 
-                    // コスト計算: 連接コスト + wcost
-                    val connectionCost = costProvider.transitionCost(dpValue.rcAttr, lexeme.lcAttr)
+                    // コスト計算: 連接コスト（prevRcAttr → lexeme.lcAttr）+ wcost
+                    val connectionCost = costProvider.transitionCost(prevRcAttr, lexeme.lcAttr)
                     val newCost = dpValue.minCost + connectionCost.toLong() + lexeme.wcost.toLong()
 
+                    // 遷移先状態: readingOffset が大きくなるため別マップへの書き込み
                     val targetMap = dpTable.getOrPut(newReadingOffset) { HashMap() }
-                    val existing = targetMap[surfaceEnd]
+                    val newInnerKey = Pair(surfaceEnd, lexeme.rcAttr)
+                    val existing = targetMap[newInnerKey]
 
                     if (existing == null || newCost < existing.minCost) {
-                        targetMap[surfaceEnd] = DpValue(
+                        targetMap[newInnerKey] = DpValue(
                             minCost = newCost,
-                            prevKey = DpKey(readingOffset = readingOffset, surfaceOffset = surfaceOffset),
+                            prevKey = DpKey(
+                                readingOffset = readingOffset,
+                                surfaceOffset = surfaceOffset,
+                                rcAttr = prevRcAttr,
+                            ),
                             lexeme = lexeme,
-                            rcAttr = lexeme.rcAttr,
                         )
                     }
                 }
             }
         }
 
-        // ゴール状態: readingOffset==reading.length かつ surfaceOffset==surface.length
-        val goalValue = dpTable[reading.length]?.get(surface.length) ?: return null
+        // ゴール走査: readingOffset==reading.length の状態のうち surfaceOffset==surface.length を満たす
+        // 全 rcAttr 状態に EOS 連接コストを加えて真の最小総コストを選ぶ。
+        // （rcAttr ごとに EOS コストが異なるため全状態を走査する必要がある。）
+        val goalStates = dpTable[reading.length] ?: return null
 
-        // EOS 連接コストを加えて総コストを確定
-        val eosCost = costProvider.transitionCost(goalValue.rcAttr, BOS_EOS_CONTEXT_ID)
-        val totalCost = goalValue.minCost + eosCost.toLong()
+        var bestTotalCost = Long.MAX_VALUE
+        var bestGoalKey: DpKey? = null
+
+        for ((innerKey, dpValue) in goalStates) {
+            val (surfaceOffset, rcAttr) = innerKey
+
+            if (surfaceOffset != surface.length) continue
+
+            val eosCost = costProvider.transitionCost(rcAttr, BOS_EOS_CONTEXT_ID)
+            val totalCost = dpValue.minCost + eosCost.toLong()
+
+            if (totalCost < bestTotalCost) {
+                bestTotalCost = totalCost
+                bestGoalKey = DpKey(
+                    readingOffset = reading.length,
+                    surfaceOffset = surface.length,
+                    rcAttr = rcAttr,
+                )
+            }
+        }
+
+        val goalKey = bestGoalKey ?: return null
 
         // バックポインタをたどって経路を復元（BOS→EOS 正順）
         val reversedPath = mutableListOf<LexemeEntry>()
-        var currentBackpointer: DpKey? = goalValue.prevKey
-        var currentLexeme: LexemeEntry? = goalValue.lexeme
+        var currentKey: DpKey? = goalKey
 
-        while (currentLexeme != null) {
-            reversedPath.add(currentLexeme)
-            val prevKey = currentBackpointer ?: break
-            val prevValue = dpTable[prevKey.readingOffset]?.get(prevKey.surfaceOffset) ?: break
+        while (currentKey != null) {
+            val innerKey = Pair(currentKey.surfaceOffset, currentKey.rcAttr)
+            val value = dpTable[currentKey.readingOffset]?.get(innerKey) ?: break
+            val lexeme = value.lexeme
 
-            currentLexeme = prevValue.lexeme
-            currentBackpointer = prevValue.prevKey
+            if (lexeme != null) {
+                reversedPath.add(lexeme)
+            }
+
+            currentKey = value.prevKey
         }
 
         val path = reversedPath.reversed()
 
-        return totalCost to path
+        return bestTotalCost to path
     }
 
     /**
