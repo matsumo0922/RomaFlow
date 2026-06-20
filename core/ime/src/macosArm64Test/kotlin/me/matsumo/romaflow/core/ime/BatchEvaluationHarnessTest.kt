@@ -153,14 +153,15 @@ class BatchEvaluationHarnessTest {
         val provider = defaultConversionProvider()
         val timeSource = TimeSource.Monotonic
 
-        // corpus: reading → 期待 top-1 表層形
-        val corpus = listOf(
-            "てんき" to "天気",
+        // corpus: EvaluationCorpus.normal の先頭エントリ + 複合文サンプル
+        // NOTE: 単語レベルの corpus は EvaluationCorpus.normal を参照すること。
+        // 複合文サンプルは live resolver の能力（文脈依存・複数形態素）を測るために残す。
+        // TODO: 複合文サンプルも EvaluationCorpus.boundaryChange に寄せる（A-5 以降）。
+        val singleWordEntries = EvaluationCorpus.normal.take(4).map { it.reading to it.expectedSurface }
+        val compoundSentenceEntries = listOf(
             "わたしはがくせいです" to "私は学生です",
-            "とうきょうにいく" to "東京に行く",
-            "にほんご" to "日本語",
-            "おはようございます" to "おはようございます",
         )
+        val corpus = singleWordEntries + compoundSentenceEntries
 
         val latencies = mutableListOf<Long>()
         var top1Correct = 0
