@@ -23,6 +23,8 @@ import kotlin.test.assertTrue
  *
  * ## 検証項目
  * - **index 尊重**: rerank が rank-0 でない index K を返したとき、preferredSurface が candidates[K] になること（かつ rank-0 と異なること）
+ * - **literal/KEEP baseline**: N-best cap を超えても literal surface（tailReading 自体）が必ず candidates に含まれること
+ * - **KEEP index 選択**: LLM が literal/KEEP の index を選んだとき preferredSurface が tailReading になること
  * - 有効 index が返ったとき、その候補表層が preferredSurface として採用される
  * - 範囲外 index が返ったとき、Viterbi 1位（rank-0）の表層が採用される
  * - 失敗（-1）が返ったとき、Viterbi 1位の表層が採用される
@@ -140,6 +142,92 @@ class RerankResolverTest {
                 rank0Surface,
                 jointProposal.preferredSurface,
                 "rank-0 の表層と異なること（index が無視されていないこと）",
+            )
+        }
+    }
+
+    /**
+     * N-best cap（デフォルト 16）を超える辞書語があっても literal/KEEP surface が candidates に残ることを確認する。
+     *
+     * ## セットアップ
+     * [ManyEntriesLexicon] は同一 reading "あ" に対し distinct な辞書語を [N_BEST_FOR_LITERAL_TEST]+1 件返す。
+     * N-best を [N_BEST_FOR_LITERAL_TEST] に絞ると literal arc（"あ"）が cap で脱落する可能性がある。
+     * [RecordingRerankProvider] で candidates を記録し、literal surface（"あ"）が含まれることを assert する。
+     *
+     * literal/KEEP を candidates から除いた実装では、このテストは「"あ" が見つからない」で落ちる。
+     */
+    @Test
+    fun literalKeepBaselineAlwaysPresentInCandidates() {
+        runBlocking {
+            val reading = "あ"
+            val recordingProvider = RecordingRerankProvider()
+            val lexicon = buildReadingLexiconWithFallback(ManyEntriesLexicon)
+            val costProvider = ZeroConnectionCostProvider
+            val resolver = RerankResolver(
+                conversionProvider = recordingProvider,
+                lexicon = lexicon,
+                costProvider = costProvider,
+                nBest = N_BEST_FOR_LITERAL_TEST,
+            )
+
+            val state = buildStateWithReading(reading)
+            val request = buildRequest(state)
+
+            resolver.propose(request)
+
+            // provider に渡された candidates を確認する
+            val candidates = requireNotNull(recordingProvider.lastRequest).candidates
+            assertTrue(
+                candidates.contains(reading),
+                "N-best cap を超えても literal/KEEP surface ('$reading') が candidates に含まれること（実際: $candidates）",
+            )
+        }
+    }
+
+    /**
+     * LLM が literal/KEEP の index を選んだとき preferredSurface が tailReading（かな読みそのもの）になることを確認する。
+     *
+     * [RecordingRerankProvider] で candidates を取得し、literal surface の index を特定。
+     * その index を返す [FixedIndexRerankProvider] で preferredSurface を検証する。
+     */
+    @Test
+    fun selectingKeepIndexPreservesLiteralSurface() {
+        runBlocking {
+            val reading = "てんき"
+            val lexicon = buildReadingLexiconWithFallback(TwoSurfaceLexicon)
+            val costProvider = ZeroConnectionCostProvider
+
+            // まず candidates を記録して literal surface の index を特定する
+            val recordingProvider = RecordingRerankProvider()
+            val recordingResolver = RerankResolver(
+                conversionProvider = recordingProvider,
+                lexicon = lexicon,
+                costProvider = costProvider,
+            )
+            recordingResolver.propose(buildRequest(buildStateWithReading(reading)))
+
+            val candidates = requireNotNull(recordingProvider.lastRequest).candidates
+            val keepIndex = candidates.indexOf(reading)
+            assertTrue(keepIndex >= 0, "literal/KEEP surface ('$reading') が candidates に存在すること（実際: $candidates）")
+
+            // KEEP index を選ぶ provider で preferredSurface を検証する
+            val resolver = RerankResolver(
+                conversionProvider = FixedIndexRerankProvider(keepIndex),
+                lexicon = lexicon,
+                costProvider = costProvider,
+            )
+
+            val proposal = resolver.propose(buildRequest(buildStateWithReading(reading)))
+
+            val jointProposal = proposal as? ResolutionProposal.ProposeJointCorrection
+            assertTrue(
+                jointProposal != null,
+                "ProposeJointCorrection を返すこと（実際: $proposal）",
+            )
+            assertEquals(
+                reading,
+                jointProposal.preferredSurface,
+                "KEEP index を選んだとき preferredSurface が literal surface ('$reading') になること",
             )
         }
     }
@@ -354,3 +442,66 @@ private object TwoSurfaceLexicon : ReadingLexicon {
         return emptyList()
     }
 }
+
+/**
+ * N-best cap 超過時の literal/KEEP baseline 保持テスト用 [ReadingLexicon]。
+ *
+ * reading "あ"（1文字）に対し [ManyEntriesLexicon.ENTRY_COUNT] 件の distinct 辞書語を返す。
+ * [N_BEST_FOR_LITERAL_TEST] より多い件数を用意することで、literal arc（"あ" そのもの）が
+ * N-best cap で脱落しうる状況を作る。
+ */
+private object ManyEntriesLexicon : ReadingLexicon {
+
+    /** "あ" に対する辞書語件数（[N_BEST_FOR_LITERAL_TEST]+1 件）。 */
+    const val ENTRY_COUNT = N_BEST_FOR_LITERAL_TEST + 1
+
+    private val lexemesForA: List<LexemeEntry> = List(ENTRY_COUNT) { entryIndex ->
+        LexemeEntry(
+            surface = "語$entryIndex",
+            reading = "ア",
+            lcAttr = 0,
+            rcAttr = 0,
+            posId = 0,
+            // 全エントリを低コストにして literal arc（"あ"、wcost=8000）より安くなるようにする
+            wcost = entryIndex + 1,
+        )
+    }
+
+    override fun commonPrefixSearch(reading: String, startOffset: Int): List<LexemeMatch> {
+        val suffix = reading.substring(startOffset)
+
+        if (suffix.startsWith("あ")) {
+            return lexemesForA.map { lexeme ->
+                LexemeMatch(
+                    readingEndOffset = startOffset + 1,
+                    lexeme = lexeme,
+                )
+            }
+        }
+
+        return emptyList()
+    }
+}
+
+/**
+ * rerank() に渡された最後の [RerankRequest] を記録し、-1 を返すテスト用 [me.matsumo.romaflow.core.ime.ConversionProvider]。
+ *
+ * `literalKeepBaselineAlwaysPresentInCandidates` で candidates を直接検証するために使う。
+ */
+private class RecordingRerankProvider : me.matsumo.romaflow.core.ime.ConversionProvider {
+
+    /** rerank() に渡された最後の [RerankRequest]。 */
+    var lastRequest: RerankRequest? = null
+        private set
+
+    override suspend fun convert(request: ConversionRequest): String = ""
+    override suspend fun candidates(request: WordCandidateRequest): String = ""
+
+    override suspend fun rerank(request: RerankRequest): Int {
+        lastRequest = request
+        return -1
+    }
+}
+
+/** [literalKeepBaselineAlwaysPresentInCandidates] で使う N-best 件数。literal が cap 外になる小さい値に設定。 */
+private const val N_BEST_FOR_LITERAL_TEST = 4

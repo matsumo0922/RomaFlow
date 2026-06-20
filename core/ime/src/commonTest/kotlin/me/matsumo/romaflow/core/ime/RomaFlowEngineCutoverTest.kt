@@ -107,17 +107,15 @@ class RomaFlowEngineCutoverTest {
     }
 
     @Test
-    fun failureProvider_convertReturnsEmpty() = runTest {
-        // provider の rerank() が例外を投げた場合、convert() が "" を返すこと（failure no-op）
-        // A-rerank cutover 後は RerankResolver が runCatching で rerank 失敗を受け取り
-        // Viterbi 1位 fallback を試みるが、FailingConversionProvider は rerank() も throw するため
-        // selectedIndex = -1 → Viterbi 1位を使う。
-        // ただし StubEmptyReadingLexicon は辞書エントリなし → literal arc のみ → 変換成功ではなく
-        // 期待するのは "てんき"（literal）。テストを新設計に合わせて Viterbi 1位 fallback を確認する。
+    fun failureProvider_convertFallsBackToViterbi() = runTest {
+        // provider の rerank() が例外をスローした場合、RerankResolver が runCatching で catch し
+        // Viterbi rank-0 fallback で変換が続くことを確認する（クラッシュしないこと）。
         //
-        // 注: 旧設計（LegacyFullTextResolver）では convert() 失敗 → "" が期待値だったが
-        // 新設計では rerank() -1 でも格子から必ず結果を返す（failure no-op は空 reading のみ）。
-        // このテストは「provider が例外をスロー時に RerankResolver がクラッシュしない」ことを確認する。
+        // FailingConversionProvider は rerank() も throw するため、
+        // selectedIndex = -1 → Viterbi 1位（literal arc のみ = "てんき"）が採用される。
+        //
+        // 注: A-rerank 設計では rerank() 失敗 → no-op ではなく Viterbi fallback で変換が完了する。
+        // failure で変換が no-op になるのは reading が空の場合のみ。
         val failingProvider = FailingConversionProvider
         val engine = RomaFlowEngine(
             conversionProvider = failingProvider,
@@ -130,8 +128,7 @@ class RomaFlowEngineCutoverTest {
 
         val result = engine.convert()
 
-        // rerank() 例外 → -1 fallback → Viterbi 1位（literal ark = "てんき"）
-        // provider が例外を投げてもクラッシュせず、非空の変換結果が返ること
+        // rerank() 例外 → catch → -1 → Viterbi 1位（literal arc = "てんき"）
         assertEquals("てんき", result)
     }
 

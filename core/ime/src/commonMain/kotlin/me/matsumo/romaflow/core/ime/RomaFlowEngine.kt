@@ -223,9 +223,10 @@ class RomaFlowEngine internal constructor(
         }
 
         // A-rerank cutover: LegacyFullTextResolver から RerankResolver（既定）に差し替える。
-        // RerankResolver は graph N-best から LLM に index で選ばせ、捏造を構造的に防ぐ。
+        // RerankResolver は graph N-best（+ literal/KEEP baseline）から LLM に index で選ばせ、捏造を構造的に防ぐ。
         // legacyResolver は A4 比較用に残す（参照あり: A4ResolverComparisonTest）。
-        // Failure / KeepCurrent は "" を返すことで現状の「空 = 据え置き」と同等の no-op になる。
+        // rerank 失敗時: RerankResolver 内で Viterbi rank-0 surface に fallback し ProposeJointCorrection を返す。
+        // Failure（hasValidPath=false 等）/ KeepCurrent は "" を返すことで「空 = 据え置き」の no-op になる。
         val state = buildResolverState(readingInput, prefixEnd, prefixContext)
         val request = ResolutionRequest(
             state = state,

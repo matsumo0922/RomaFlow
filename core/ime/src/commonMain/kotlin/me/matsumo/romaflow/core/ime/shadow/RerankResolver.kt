@@ -15,9 +15,15 @@ import me.matsumo.romaflow.core.morphology.ReadingLexicon
  * 構造的に捏造を不可にする。返ってきた index に対応する表層文字列を
  * [ResolutionProposal.ProposeJointCorrection]（preferredSurface）として返す。
  *
+ * ## literal/KEEP baseline（issue #23 A 受入条件）
+ * N-best cap（デフォルト 16）の削減で literal full path（ひらがな読みそのもの）が脱落しないよう、
+ * candidates リストに tail reading 自体（literal surface）を必ず含める。
+ * 辞書語が多い読みでも「変換しない／かな保持」が LLM の選択肢として常に存在する。
+ * 既に N-best 内に含まれる場合は dedupe して追加しない。
+ *
  * ## 失敗時の挙動
  * rerank 呼び出し失敗（ネットワークエラー・API キー未設定等）または index が範囲外の場合は、
- * graph の Viterbi 1位（rank-0 最安経路）の表層を採用する。
+ * graph の Viterbi 1位（rank-0 最安経路）の表層を採用する（literal/KEEP でなく辞書 best を使う）。
  *
  * ## 既定 resolver
  * A-5 cutover 後は [LegacyFullTextResolver] に代わり本 resolver を live 経路で使用する。
@@ -66,7 +72,16 @@ internal class RerankResolver(
 
         // graph から重複なし候補表層リストを構築する
         val candidateSession = CandidateSession.buildFrom(graph, nextSessionId = 0)
-        val candidates = candidateSession.entries.map { it.surface }
+        val nBestCandidates = candidateSession.entries.map { it.surface }
+
+        // literal/KEEP baseline を candidates に必ず含める（issue #23 A 受入条件）。
+        // tailReading そのもの（かな読み）が literal full path の表層。N-best cap で脱落しても
+        // LLM が「変換しない」を選べるよう末尾に追加する（既出の場合は dedupe して追加しない）。
+        val candidates = if (nBestCandidates.contains(tailReading)) {
+            nBestCandidates
+        } else {
+            nBestCandidates + tailReading
+        }
 
         // LLM に index で選ばせる（失敗時・範囲外は -1）
         val rerankRequest = RerankRequest(
@@ -77,7 +92,7 @@ internal class RerankResolver(
         val rerankResult = runCatching { conversionProvider.rerank(rerankRequest) }
         val selectedIndex = rerankResult.getOrElse { -1 }
 
-        val preferredSurface = selectPreferredSurface(graph, candidateSession, selectedIndex)
+        val preferredSurface = selectPreferredSurface(graph, candidates, selectedIndex)
 
         return ResolutionProposal.ProposeJointCorrection(
             sourceSpan = SourceSpan(
@@ -92,19 +107,20 @@ internal class RerankResolver(
     /**
      * rerank index から優先表層を決定する。
      *
-     * [selectedIndex] が有効範囲内（0 以上かつ候補数未満）なら対応する候補表層を返す。
+     * [selectedIndex] が有効範囲内（0 以上かつ [candidates] サイズ未満）なら対応する候補表層を返す。
+     * [candidates] は literal/KEEP baseline 付きの完全なリストを渡すこと。
      * 無効（-1 またはその他の範囲外）の場合は [graph] の Viterbi 1位（rank-0）の表層を返す。
      * graph が空の場合は null を返す（呼び出し側で ProposeJointCorrection の preferredSurface = null 扱い）。
      */
     private fun selectPreferredSurface(
         graph: CompositionGraph,
-        candidateSession: CandidateSession,
+        candidates: List<String>,
         selectedIndex: Int,
     ): String? {
-        val isValidIndex = selectedIndex in 0 until candidateSession.count
+        val isValidIndex = selectedIndex in 0 until candidates.size
 
         if (isValidIndex) {
-            return candidateSession.surfaceOrNull(selectedIndex)
+            return candidates[selectedIndex]
         }
 
         // 失敗時フォールバック: Viterbi 1位（rank-0）の表層
