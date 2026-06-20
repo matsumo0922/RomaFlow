@@ -86,42 +86,15 @@ class RomaFlowEngineCutoverIntegrationTest {
     }
 
     @Test
-    fun cutover_oovFallback_asciiSurfaceUsesLegacySegmenter() = runBlocking {
-        // OOV fallback: provider が格子上に経路の作れない surface を返したとき
-        // buildTailSegments（legacy segmenter/aligner 経由）に落ちて provider の surface が表示されること。
+    fun cutover_rerankFailure_viterbiRank0Fallback() = runBlocking {
+        // A-rerank 設計: rerank() が -1 を返した場合（失敗）、格子の Viterbi 1位（rank-0）の表層を採用する。
         //
-        // ひらがな "てんき" に対して ASCII "XYZ" を返すと、格子の全 arc（IPADIC 語・LiteralLexicon ひらがな文字）
-        // とも surface が一致せず findMinCostPathForSurface が null を返す。
-        // applyWithPreferredSurface → state（isConverted=false）→ buildTailSegments fallback となる。
-        val oovSurface = "XYZ"
-        val provider = FixedConversionProvider(oovSurface)
+        // FixedConversionProvider は rerank() で -1 を返す（convert() の固定値は使われない）。
+        // IPADIC + MomijiConnectionCostProvider を使った格子の rank-0 は "天気" になるため、
+        // rerank 失敗でも "天気" に変換されることを確認する。
+        val provider = FixedConversionProvider("XYZ") // convert() の固定値は参照されない
         val engine = RomaFlowEngine(
             conversionProvider = provider,
-            segmenter = OovSegmenter(oovSurface),
-            aligner = DpReadingAligner(),
-            readingLexiconFactory = { lexicon },
-            connectionCostProviderFactory = { costProvider },
-        )
-
-        engine.inputRomaji("tenki")
-
-        val convertResult = engine.convert()
-
-        // convert() は provider が返した surface をそのまま返す
-        assertEquals(oovSurface, convertResult)
-
-        engine.applyConversion(convertResult)
-
-        // legacy buildTailSegments fallback で segment が生成され、surface が provider の結果と一致すること
-        assertTrue(engine.isConverted(), "OOV fallback でも isConverted=true になること")
-        assertTrue(engine.segmentCount() >= 1, "segment が最低1つ生成されること")
-        assertEquals(oovSurface, engine.segmentText(0), "legacy fallback の segment surface が provider の結果と一致すること")
-    }
-
-    @Test
-    fun cutover_emptyConvert_applyIsNoOp() = runBlocking {
-        val engine = RomaFlowEngine(
-            conversionProvider = EmptyConversionProvider,
             segmenter = TenkiSegmenter,
             aligner = DpReadingAligner(),
             readingLexiconFactory = { lexicon },
@@ -132,13 +105,42 @@ class RomaFlowEngineCutoverIntegrationTest {
 
         val convertResult = engine.convert()
 
-        // provider が空を返す場合、convert() も "" を返す
-        assertEquals("", convertResult)
+        // rerank 失敗（-1）→ Viterbi 1位 = "天気"
+        assertEquals("天気", convertResult)
 
-        val applyResult = engine.applyConversion("")
+        val preedit = engine.applyConversion(convertResult)
 
-        assertEquals("", applyResult)
-        assertFalse(engine.isConverted())
+        assertTrue(preedit.contains("天気"), "rerank 失敗でも Viterbi 1位 fallback で変換されること: actual=$preedit")
+        assertTrue(engine.isConverted())
+    }
+
+    @Test
+    fun cutover_rerankAlwaysFails_viterbiRank0IsUsed() = runBlocking {
+        // A-rerank 設計: rerank() が常に -1 を返す provider でも Viterbi 1位（rank-0）で変換が成功すること。
+        //
+        // AlwaysFailRerankProvider は rerank() で常に -1 を返す。
+        // IPADIC + MomijiConnectionCostProvider の格子 rank-0 は "天気" になるため、
+        // rerank 失敗でも "天気" に変換されることを確認する。
+        val engine = RomaFlowEngine(
+            conversionProvider = AlwaysFailRerankProvider,
+            segmenter = TenkiSegmenter,
+            aligner = DpReadingAligner(),
+            readingLexiconFactory = { lexicon },
+            connectionCostProviderFactory = { costProvider },
+        )
+
+        engine.inputRomaji("tenki")
+
+        val convertResult = engine.convert()
+
+        // rerank 失敗（-1）→ Viterbi 1位 = "天気"
+        assertEquals("天気", convertResult)
+
+        val applyResult = engine.applyConversion(convertResult)
+
+        // rerank 失敗でも Viterbi 1位 fallback で変換が完了すること
+        assertEquals("天気", applyResult)
+        assertTrue(engine.isConverted())
     }
 
     @Test
@@ -169,28 +171,28 @@ class RomaFlowEngineCutoverIntegrationTest {
 
 // ---- helpers ----
 
-/** 固定の変換結果を返す [ConversionProvider]。 */
+/** 固定の変換結果を返す [ConversionProvider]。rerank は常に -1 を返す。 */
 private class FixedConversionProvider(private val fixedResult: String) : ConversionProvider {
     override suspend fun convert(request: ConversionRequest): String = fixedResult
     override suspend fun candidates(request: WordCandidateRequest): String = ""
+    override suspend fun rerank(request: RerankRequest): Int = -1
 }
 
-/** 空文字を返す [ConversionProvider]（failure no-op テスト用）。 */
-private object EmptyConversionProvider : ConversionProvider {
+/**
+ * rerank() が常に -1 を返す [ConversionProvider]（rerank 失敗テスト用）。
+ *
+ * A-rerank 設計では rerank 失敗時は Viterbi 1位 fallback を使うため、
+ * 変換が no-op になるのではなく格子から最良 surface が採用される。
+ */
+private object AlwaysFailRerankProvider : ConversionProvider {
     override suspend fun convert(request: ConversionRequest): String = ""
     override suspend fun candidates(request: WordCandidateRequest): String = ""
+    override suspend fun rerank(request: RerankRequest): Int = -1
 }
 
 /** 「天気」を 1 token で分割する [Segmenter]。 */
 private object TenkiSegmenter : Segmenter {
     override fun segment(text: String): List<SegmentToken> {
         return listOf(SegmentToken(text, text))
-    }
-}
-
-/** 指定 surface を 1 token で分割する OOV テスト用 [Segmenter]。 */
-private class OovSegmenter(private val surface: String) : Segmenter {
-    override fun segment(text: String): List<SegmentToken> {
-        return listOf(SegmentToken(surface, text))
     }
 }

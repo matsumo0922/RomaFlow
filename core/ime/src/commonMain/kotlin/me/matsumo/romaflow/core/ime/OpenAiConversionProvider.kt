@@ -19,6 +19,9 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
@@ -90,6 +93,26 @@ internal class OpenAiConversionProvider(
         }
 
         return candidatesJson.trim()
+    }
+
+    override suspend fun rerank(request: RerankRequest): Int {
+        val reading = request.reading
+        val candidates = request.candidates
+
+        if (reading.isBlank() || candidates.isEmpty() || config.apiKey.isBlank()) {
+            return -1
+        }
+
+        val result = runCatching { requestRerank(reading, request.prefixContext, candidates) }
+        val rerankIndex = result.getOrNull()
+
+        if (rerankIndex == null) {
+            Napier.w("OpenAI rerank failed", result.exceptionOrNull())
+
+            return -1
+        }
+
+        return rerankIndex
     }
 
     private suspend fun requestConversion(
@@ -178,6 +201,105 @@ internal class OpenAiConversionProvider(
         return "文脈: $context\n読み: $reading"
     }
 
+    private suspend fun requestRerank(
+        reading: String,
+        prefixContext: String,
+        candidates: List<String>,
+    ): Int {
+        val userContent = buildRerankUserContent(reading, prefixContext, candidates)
+        val request = ChatCompletionRequest(
+            model = config.model,
+            messages = listOf(
+                ChatMessage(role = "system", content = RERANK_SYSTEM_PROMPT),
+                ChatMessage(role = "user", content = userContent),
+            ),
+            reasoningEffort = REASONING_EFFORT,
+            responseFormat = buildRerankResponseFormat(),
+        )
+        val endpoint = "${config.baseUrl.trimEnd('/')}/chat/completions"
+
+        val response = httpClient.post(endpoint) {
+            header(HttpHeaders.Authorization, "Bearer ${config.apiKey}")
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }
+        val completion = response.body<ChatCompletionResponse>()
+        val content = completion.choices.firstOrNull()?.message?.content.orEmpty()
+
+        return parseRerankIndex(content, candidates.size)
+    }
+
+    // 番号付き候補一覧と読み・前方文脈を組み合わせたユーザーコンテンツを構築する。
+    private fun buildRerankUserContent(
+        reading: String,
+        prefixContext: String,
+        candidates: List<String>,
+    ): String {
+        val builder = StringBuilder()
+
+        if (prefixContext.isNotBlank()) {
+            builder.appendLine("前方文脈: $prefixContext")
+        }
+
+        builder.appendLine("読み: $reading")
+        builder.appendLine("候補:")
+
+        for ((candidateIndex, candidate) in candidates.withIndex()) {
+            builder.appendLine("$candidateIndex: $candidate")
+        }
+
+        return builder.toString().trimEnd()
+    }
+
+    // Structured Outputs の JSON レスポンス `{"index": <int>}` をパースし、
+    // 範囲外・parse 失敗時は -1 を返す。
+    private fun parseRerankIndex(content: String, candidatesSize: Int): Int {
+        if (content.isBlank()) {
+            return -1
+        }
+
+        val parsedIndex = runCatching {
+            val json = Json { ignoreUnknownKeys = true }
+            val obj = json.parseToJsonElement(content)
+            val indexElement = obj.jsonObject["index"] ?: return -1
+
+            indexElement.jsonPrimitive.int
+        }.getOrElse { return -1 }
+
+        val isInRange = parsedIndex in 0 until candidatesSize
+
+        return if (isInRange) parsedIndex else -1
+    }
+
+    private fun buildRerankResponseFormat(): JsonObject {
+        val jsonSchema = buildJsonObject {
+            put("name", "rerank_selection")
+            put("strict", true)
+            put("schema", buildRerankSchema())
+        }
+
+        return buildJsonObject {
+            put("type", "json_schema")
+            put("json_schema", jsonSchema)
+        }
+    }
+
+    private fun buildRerankSchema(): JsonObject {
+        val indexProperty = buildJsonObject {
+            put("type", "integer")
+        }
+        val properties = buildJsonObject {
+            put("index", indexProperty)
+        }
+
+        return buildJsonObject {
+            put("type", "object")
+            put("properties", properties)
+            put("required", JsonArray(listOf(JsonPrimitive("index"))))
+            put("additionalProperties", false)
+        }
+    }
+
     private fun buildCandidateResponseFormat(): JsonObject {
         val jsonSchema = buildJsonObject {
             put("name", "word_candidates")
@@ -230,6 +352,18 @@ internal class OpenAiConversionProvider(
                 "説明・引用符・前置き・前方文脈の再掲を一切しないこと。" +
                 "英単語や記号は変換せずそのまま保持してください。" +
                 "例: 前方文脈『私は』続きの読み『がっこうにいく』→ 出力『学校に行く』（『私は』は出力しない）。"
+
+        /**
+         * rerank（候補選択）専用の system prompt。
+         *
+         * 格子から導出した番号付き候補一覧を提示し、前方文脈に最も自然な候補の番号を1つ選ばせる。
+         * 変換文字列を「生成」させず「index で選択」させることで構造的に捏造を不可にする。
+         */
+        const val RERANK_SYSTEM_PROMPT =
+            "あなたは日本語IMEの変換候補選択エンジンです。" +
+                "与えられた読みと候補リストから、前方文脈（あれば）に最も自然に合う候補の番号（index）を1つ選んでください。" +
+                "必ず {\"index\": <number>} の JSON のみを出力し、説明・前置きは出力しないこと。" +
+                "候補リストにない文字列を出力したり、新しい変換を生成したりしてはいけません。"
 
         /** 選択文節の読みに対する同音異義語・別変換候補を、文脈に沿って JSON で列挙させる system prompt。 */
         const val CANDIDATE_SYSTEM_PROMPT =

@@ -2,9 +2,11 @@ package me.matsumo.romaflow.core.ime
 
 import kotlinx.coroutines.test.runTest
 import me.matsumo.romaflow.core.morphology.HomophoneDictionary
+import me.matsumo.romaflow.core.morphology.LexemeEntry
 import me.matsumo.romaflow.core.morphology.LexemeMatch
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
 import me.matsumo.romaflow.core.morphology.ZeroConnectionCostProvider
+import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -140,8 +142,9 @@ class RomaFlowEngineTest {
 
         assertEquals("日本語", engine.convertAndApply())
         assertTrue(engine.isConverted())
-        assertEquals(3, engine.segmentCount())
-        assertEquals("日", engine.segmentText(0))
+        // FakeReadingLexicon は "にほんご" を 1 lexeme（日本語）として返すため 1 segment
+        assertEquals(1, engine.segmentCount())
+        assertEquals("日本語", engine.segmentText(0))
         assertEquals("Converted", engine.segmentStatus(0))
     }
 
@@ -160,16 +163,17 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = FakeSegmenter(),
             aligner = FakeAligner(),
-            readingLexiconFactory = { NoEntryReadingLexicon },
+            readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("nihongo")
 
         engine.convert()
 
-        val request = requireNotNull(recording.lastRequest)
-        assertEquals("にほんご", request.readingInput)
-        assertEquals("", request.prefixContext)
+        // A-rerank cutover 後は RerankResolver が rerank() を呼ぶ（convert() は呼ばれない）。
+        val rerankRequest = requireNotNull(recording.lastRerankRequest)
+        assertEquals("にほんご", rerankRequest.reading)
+        assertEquals("", rerankRequest.prefixContext)
     }
 
     @Test
@@ -241,9 +245,11 @@ class RomaFlowEngineTest {
         engine.convertAndApply()
 
         // 変換済 segments（漢字）は残し、追記分は未変換かな tail として混在表示する。
+        // FakeReadingLexicon では "かんじ" が 1 lexeme（漢字）で 1 segment に変換される。
+        // 追記の "あ" が tail として別 segment になるため合計 2 segments。
         assertEquals("漢字あ", engine.inputRomaji("a"))
-        assertEquals(3, engine.segmentCount())
-        assertEquals("Unconverted", engine.segmentStatus(2))
+        assertEquals(2, engine.segmentCount())
+        assertEquals("Unconverted", engine.segmentStatus(1))
 
         // 末尾の未変換かなを 1 つ削ると変換済 preedit に戻る（tail の末尾 1 かな削除）。
         assertEquals("漢字", engine.deleteBackward())
@@ -357,8 +363,10 @@ class RomaFlowEngineTest {
 
     @Test
     fun moveSelection_navigatesSegmentsWithClamp() = runTest {
-        val engine = newEngine()
-        engine.inputRomaji("nihongo")
+        // WATASHI_TENKI_SEGMENTER は "私天気" を 2 segment に分割する。
+        // FakeReadingLexicon が "わたし" → 私（1 segment）、"てんき" → 天気（1 segment）を返すため合計 2 segments。
+        val engine = newEngine(WATASHI_TENKI_SEGMENTER)
+        engine.inputRomaji("watashitenki")
         engine.convertAndApply()
 
         assertEquals(-1, engine.selectedSegmentIndex())
@@ -367,12 +375,11 @@ class RomaFlowEngineTest {
         engine.moveSelectionRight()
         assertEquals(-1, engine.selectedSegmentIndex())
 
-        // ← で末尾 clause から文節選択へ入る。
+        // ← で末尾 clause（index 1）から文節選択へ入る。
         engine.moveSelectionLeft()
-        assertEquals(2, engine.selectedSegmentIndex())
+        assertEquals(1, engine.selectedSegmentIndex())
 
-        // ← は先頭でクランプ。
-        engine.moveSelectionLeft()
+        // ← で先頭 clause（index 0）へ移動し、そのままクランプ。
         engine.moveSelectionLeft()
         engine.moveSelectionLeft()
         assertEquals(0, engine.selectedSegmentIndex())
@@ -383,20 +390,19 @@ class RomaFlowEngineTest {
 
         // 末尾 clause を → で越えると選択解除しカーソルを末尾へ戻す。
         engine.moveSelectionRight()
-        assertEquals(2, engine.selectedSegmentIndex())
-        engine.moveSelectionRight()
         assertEquals(-1, engine.selectedSegmentIndex())
     }
 
     @Test
     fun moveSelectionLeft_fromUnselectedSelectsLastSegment() = runTest {
+        // "にほんご" は FakeReadingLexicon で 1 segment（日本語）になる → 最後の segment は index 0
         val engine = newEngine()
         engine.inputRomaji("nihongo")
         engine.convertAndApply()
 
         engine.moveSelectionLeft()
 
-        assertEquals(2, engine.selectedSegmentIndex())
+        assertEquals(0, engine.selectedSegmentIndex())
     }
 
     @Test
@@ -724,7 +730,7 @@ class RomaFlowEngineTest {
             segmenter = WATASHI_TENKI_SEGMENTER,
             aligner = FakeAligner(),
             homophoneDictionary = dictionary,
-            readingLexiconFactory = { NoEntryReadingLexicon },
+            readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
@@ -754,7 +760,7 @@ class RomaFlowEngineTest {
             segmenter = WATASHI_TENKI_SEGMENTER,
             aligner = FakeAligner(),
             homophoneDictionary = dictionary,
-            readingLexiconFactory = { NoEntryReadingLexicon },
+            readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
@@ -799,7 +805,7 @@ class RomaFlowEngineTest {
             segmenter = WATASHI_TENKI_SEGMENTER,
             aligner = FakeAligner(),
             homophoneDictionary = dictionary,
-            readingLexiconFactory = { NoEntryReadingLexicon },
+            readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
@@ -839,22 +845,24 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = RECONVERT_SEGMENTER,
             aligner = FakeAligner(),
-            readingLexiconFactory = { NoEntryReadingLexicon },
+            readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
 
-        // OOV fallback では "わたしてんき"（6文字）が 1 文字ずつ 6 segment に分割される。
-        // ← x6 で末尾（き=index 5）から先頭（わ=index 0）へ移動して segment 0 のみを確定。
-        // lockEnd = max(-1, 0) = 0 → index 0 のみ Locked、prefixEnd=1、tail="たしてんき"。
-        repeat(6) { engine.moveSelectionLeft() }
+        // FakeReadingLexicon で "わたしてんき" は 2 segment（私 index 0, 天気 index 1）に変換される。
+        // ← x2 で末尾（天気=index 1）から先頭（私=index 0）へ移動して segment 0 のみを確定。
+        // "渡し" の reading は "わたし"（3文字）→ prefixEnd=3、tail="てんき"。
+        engine.moveSelectionLeft()
+        engine.moveSelectionLeft()
         engine.confirmCandidate("渡し")
         engine.convert()
 
-        val request = requireNotNull(recording.lastRequest)
-        assertEquals("たしてんき", request.readingInput)
-        assertEquals("渡し", request.prefixContext)
+        // A-rerank cutover 後は RerankResolver が rerank() を呼ぶ（convert() は呼ばれない）。
+        val rerankRequest = requireNotNull(recording.lastRerankRequest)
+        assertEquals("てんき", rerankRequest.reading)
+        assertEquals("渡し", rerankRequest.prefixContext)
     }
 
     @Test
@@ -902,7 +910,7 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = RECONVERT_SEGMENTER,
             aligner = FakeAligner(),
-            readingLexiconFactory = { NoEntryReadingLexicon },
+            readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
@@ -922,9 +930,10 @@ class RomaFlowEngineTest {
         // lockedPrefix が空 → tail は全文。再変換で全体が再変換対象になる。
         engine.convert()
 
-        val request = requireNotNull(recording.lastRequest)
-        assertEquals("わたしてんき", request.readingInput)
-        assertEquals("", request.prefixContext)
+        // A-rerank cutover 後は RerankResolver が rerank() を呼ぶ（convert() は呼ばれない）。
+        val rerankRequest = requireNotNull(recording.lastRerankRequest)
+        assertEquals("わたしてんき", rerankRequest.reading)
+        assertEquals("", rerankRequest.prefixContext)
     }
 
     @Test
@@ -970,7 +979,7 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = FakeSegmenter(),
             aligner = FakeAligner(),
-            readingLexiconFactory = { NoEntryReadingLexicon },
+            readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("kaki")
@@ -978,8 +987,9 @@ class RomaFlowEngineTest {
         engine.deleteBackward()
         engine.convert()
 
-        val request = requireNotNull(recording.lastRequest)
-        assertEquals("か", request.readingInput)
+        // A-rerank cutover 後は RerankResolver が rerank() を呼ぶ（convert() は呼ばれない）。
+        val rerankRequest = requireNotNull(recording.lastRerankRequest)
+        assertEquals("か", rerankRequest.reading)
     }
 
     @Test
@@ -1010,7 +1020,7 @@ class RomaFlowEngineTest {
             conversionProvider = recording,
             segmenter = WATASHI_TENKI_SEGMENTER,
             aligner = FakeAligner(),
-            readingLexiconFactory = { NoEntryReadingLexicon },
+            readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
         )
         engine.inputRomaji("watashitenki")
@@ -1024,8 +1034,9 @@ class RomaFlowEngineTest {
         // Locked segment がないので convert の provider には全文 "わたしてんき" が渡る。
         engine.convert()
 
-        val request = requireNotNull(recording.lastRequest)
-        assertEquals("わたしてんき", request.readingInput)
+        // A-rerank cutover 後は RerankResolver が rerank() を呼ぶ（convert() は呼ばれない）。
+        val rerankRequest = requireNotNull(recording.lastRerankRequest)
+        assertEquals("わたしてんき", rerankRequest.reading)
     }
 }
 
@@ -1084,19 +1095,21 @@ private val RECONVERT_SEGMENTER = MappedSegmenter(
 /**
  * FakeConversionProvider + 指定 [segmenter] + FakeAligner を注入したテスト用 [RomaFlowEngine]。
  *
- * A-5 cutover 後も [RomaFlowEngineTest] の不変条件テストが実辞書に依存しないよう、
- * [NoEntryReadingLexicon] と [ZeroConnectionCostProvider] を注入する。
- * 辞書なしで ProposalApplier を通すと OOV fallback（LiteralLexicon）が使われ、
- * segment 化は legacy [buildTailSegments]（`FakeSegmenter` 使用）にフォールバックする。
- * これにより A-5 以前のテスト期待値をそのまま維持できる。
+ * A-rerank cutover 後は [RerankResolver] が格子から N-best 候補を取得するため、
+ * [FakeConversionProvider.CONVERSION_TABLE] と整合する [FakeReadingLexicon] を注入する。
+ * [buildReadingLexiconWithFallback] で [me.matsumo.romaflow.core.morphology.LiteralLexicon] も付与し、
+ * OOV（辞書外の入力）でも fallback arc を確保する。
  * 実辞書による verified path の動作は [RomaFlowEngineCutoverIntegrationTest] で確認する。
  */
 private fun newEngine(segmenter: Segmenter = FakeSegmenter()): RomaFlowEngine {
+    // A-rerank cutover 後は RerankResolver が格子から候補を取得するため、
+    // FakeConversionProvider.CONVERSION_TABLE と整合する FakeReadingLexicon を使う。
+    // buildReadingLexiconWithFallback で LiteralLexicon fallback も付与する。
     return RomaFlowEngine(
         conversionProvider = FakeConversionProvider(),
         segmenter = segmenter,
         aligner = FakeAligner(),
-        readingLexiconFactory = { NoEntryReadingLexicon },
+        readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
         connectionCostProviderFactory = { ZeroConnectionCostProvider },
     )
 }
@@ -1114,6 +1127,54 @@ private object NoEntryReadingLexicon : ReadingLexicon {
     override fun commonPrefixSearch(reading: String, startOffset: Int): List<LexemeMatch> = emptyList()
 }
 
+/**
+ * [FakeConversionProvider.CONVERSION_TABLE] に対応するテスト用 [ReadingLexicon]。
+ *
+ * A-rerank cutover 後、[RerankResolver] が格子から N-best 候補を構築するために辞書エントリが必要になった。
+ * このクラスは [FakeConversionProvider] の変換表と整合するテスト用 lexeme を提供することで、
+ * [newEngine] での commonTest レベルの変換テストを実辞書なしで維持する。
+ *
+ * 各エントリは reading（ひらがな）→ surface（漢字）のマッピングを 1 lexeme として提供する。
+ * reading はカタカナ（lexeme の慣習に合わせる）で格納する。
+ */
+private object FakeReadingLexicon : ReadingLexicon {
+
+    // reading（ひらがな）→ (surface, カタカナ reading) のマッピング
+    private val entries = listOf(
+        Triple("にほんご", "日本語", "ニホンゴ"),
+        Triple("とうきょう", "東京", "トウキョウ"),
+        Triple("へんかん", "変換", "ヘンカン"),
+        Triple("かんじ", "漢字", "カンジ"),
+        Triple("わたし", "私", "ワタシ"),
+        Triple("てんき", "天気", "テンキ"),
+    )
+
+    override fun commonPrefixSearch(reading: String, startOffset: Int): List<LexemeMatch> {
+        val suffix = reading.substring(startOffset)
+        val matches = mutableListOf<LexemeMatch>()
+
+        for ((hiragana, surface, katakana) in entries) {
+            if (suffix.startsWith(hiragana)) {
+                matches.add(
+                    LexemeMatch(
+                        readingEndOffset = startOffset + hiragana.length,
+                        lexeme = LexemeEntry(
+                            surface = surface,
+                            reading = katakana,
+                            lcAttr = 0,
+                            rcAttr = 0,
+                            posId = 0,
+                            wcost = 100,
+                        ),
+                    ),
+                )
+            }
+        }
+
+        return matches
+    }
+}
+
 /** convert() の結果を applyConversion() で反映するテスト用ヘルパー。 */
 private suspend fun RomaFlowEngine.convertAndApply(): String {
     val result = convert()
@@ -1121,10 +1182,19 @@ private suspend fun RomaFlowEngine.convertAndApply(): String {
     return applyConversion(result)
 }
 
-/** convert() に渡された最後の [ConversionRequest] を記録し、変換結果は素通しで返すテスト用 provider。 */
+/**
+ * rerank() に渡された最後の [RerankRequest] を記録し、失敗（-1）を返すテスト用 provider。
+ *
+ * A-rerank cutover 後は engine が直接 convert() を呼ばなくなったため、convert() ではなく
+ * rerank() の呼び出しを記録する。rerank() が -1 を返すことで RerankResolver は Viterbi 1位 fallback
+ * を採用し、変換結果として reading の 1 文字単位 literal surface を返す。
+ */
 private class RecordingConversionProvider : ConversionProvider {
 
     var lastRequest: ConversionRequest? = null
+        private set
+
+    var lastRerankRequest: RerankRequest? = null
         private set
 
     override suspend fun convert(request: ConversionRequest): String {
@@ -1135,6 +1205,12 @@ private class RecordingConversionProvider : ConversionProvider {
 
     override suspend fun candidates(request: WordCandidateRequest): String {
         return ""
+    }
+
+    override suspend fun rerank(request: RerankRequest): Int {
+        lastRerankRequest = request
+
+        return -1
     }
 }
 

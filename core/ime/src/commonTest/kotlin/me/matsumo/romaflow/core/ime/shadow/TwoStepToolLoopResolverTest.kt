@@ -136,4 +136,6 @@ private class RecordingConversionProvider(
         candidatesCalled = true
         return """{"candidates":[]}"""
     }
+
+    override suspend fun rerank(request: me.matsumo.romaflow.core.ime.RerankRequest): Int = -1
 }

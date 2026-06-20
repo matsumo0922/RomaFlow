@@ -30,4 +30,34 @@ internal interface ConversionProvider {
      * 「候補なし」として扱う。
      */
     suspend fun candidates(request: WordCandidateRequest): String
+
+    /**
+     * rerank（call3）。graph 由来の N-best 候補一覧から最も自然な候補の index を1つ選ぶ。
+     *
+     * LLM に変換文字列を「生成」させず、格子から導出した候補一覧を「index で選ばせる」ことで
+     * 構造的に捏造を不可にする（§A-rerank 設計）。
+     *
+     * 失敗した場合（API key 未設定・ネットワークエラー・タイムアウト・候補空等）は -1 を返す。
+     * 呼び出し側は -1 を「辞書 Viterbi 1位（rank-0）で代替」として扱う。
+     * 返却 index が候補リストの範囲外の場合も呼び出し側が -1 と同様に扱う。
+     */
+    suspend fun rerank(request: RerankRequest): Int
 }
+
+/**
+ * rerank（call3）のリクエスト。
+ *
+ * graph 由来の N-best 候補を番号付きで提示し、前方文脈に最も自然な候補を1つ選ばせる。
+ *
+ * @param reading 変換対象のひらがな読み（tail のみ、prefix lock 分は除く）。
+ * @param prefixContext 確定済み prefix の表層文字列（lock なしの場合は空文字）。
+ * @param candidates 格子から導出した N-best 候補の表層文字列リスト（cost 昇順、dedup 済み）。
+ */
+internal data class RerankRequest(
+    /** 変換対象のひらがな読み（tail のみ）。 */
+    val reading: String,
+    /** 確定済み prefix の表層（lock なしは空文字）。 */
+    val prefixContext: String,
+    /** 格子由来の N-best 候補表層リスト（cost 昇順、dedup 済み）。 */
+    val candidates: List<String>,
+)
