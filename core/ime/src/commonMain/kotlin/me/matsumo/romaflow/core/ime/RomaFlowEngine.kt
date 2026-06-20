@@ -3,8 +3,20 @@ package me.matsumo.romaflow.core.ime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import me.matsumo.romaflow.core.ime.shadow.CompositionState
+import me.matsumo.romaflow.core.ime.shadow.LegacyFullTextResolver
+import me.matsumo.romaflow.core.ime.shadow.PinnedPathConstraint
+import me.matsumo.romaflow.core.ime.shadow.ProposalApplier
+import me.matsumo.romaflow.core.ime.shadow.ResolutionProposal
+import me.matsumo.romaflow.core.ime.shadow.ResolutionRequest
+import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.HomophoneDictionary
 import me.matsumo.romaflow.core.morphology.IpadicHomophoneDictionary
+import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
+import me.matsumo.romaflow.core.morphology.LexemeEntry
+import me.matsumo.romaflow.core.morphology.ReadingLexicon
+import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
+import me.matsumo.romaflow.core.morphology.defaultConnectionCostProvider
 
 /**
  * RomaFlow IME core の変換 draft を保持するエンジン。
@@ -12,16 +24,30 @@ import me.matsumo.romaflow.core.morphology.IpadicHomophoneDictionary
  * IMKInputController インスタンスごとに1つ生成され、[ConversionDraft]（romaji 入力層・変換済 segment・
  * 単語選択）を持つ。入力は 2 レイヤに分かれ、romaji→kana は末尾の pendingRomaji にだけ増分適用し、
  * 確定したかなは readingInput に frozen として積む。kana→kanji は Tab 起動で readingInput 全体を
- * provider（call1）に投入する。この分離により、Tab 変換後に追記しても確定済みのかなが再解釈されない。
- * 変換結果の各 segment は [ReadingAligner] で readingInput 上の [TextRange] に対応付け、per-segment の
- * revert・削除を range 単位で扱う。公開 API は Swift Export に合わせ String / Int / Boolean / suspend のみを
- * 受け渡しする（List は出さない）。
+ * resolver（[LegacyFullTextResolver]）に投入し、§6 検証（[ProposalApplier]）を経由して verified path
+ * → projected segments へ変換する（A-5 cutover）。変換結果の各 segment は [ReadingAligner] で
+ * readingInput 上の [TextRange] に対応付け、per-segment の revert・削除を range 単位で扱う。
+ * 格子上に経路が存在しない OOV/自由漢字は legacy [buildTailSegments] fallback で回帰ゼロを保証する。
+ * 公開 API は Swift Export に合わせ String / Int / Boolean / suspend のみを受け渡しする（List は出さない）。
+ *
+ * ## A-5 cutover: lexicon / costProvider 注入
+ * テスト注入用に internal constructor で [readingLexiconFactory] と [connectionCostProviderFactory] を受け取る。
+ * public constructor は本番向けの [IpadicReadingLexicon] と [defaultConnectionCostProvider] を使う。
+ * matrix ロード（重い）は初回 [convert] まで遅延するため、engine 構築時のレイテンシを避ける。
+ * factory はラムダとして渡され、[readingLexicon] / [connectionCostProvider] の by lazy フィールドで
+ * 初回 convert() 時に評価される。これにより engine 構築時点ではいかなるロードも走らない。
+ *
+ * ## スコープ外（follow-up）
+ * inputRomaji / deleteBackward / candidates / lock / marked-text / Swift adapter の shadow 化、
+ * atom 座標化・lock 跨ぎ厳密化・preview surface、OneShotJointPatch 本実装は A-5 以降の follow-up。
  */
 class RomaFlowEngine internal constructor(
     private val conversionProvider: ConversionProvider,
     private val segmenter: Segmenter,
     private val aligner: ReadingAligner,
     private val homophoneDictionary: HomophoneDictionary = EmptyHomophoneDictionary,
+    private val readingLexiconFactory: () -> ReadingLexicon = ::IpadicReadingLexicon,
+    private val connectionCostProviderFactory: () -> ConnectionCostProvider = ::defaultConnectionCostProvider,
 ) {
 
     private val converter = RomajiKanaConverter()
@@ -55,12 +81,38 @@ class RomaFlowEngine internal constructor(
     // 実行中の call2 要求が発行されたときの candidateRequestId。結果適用時にこれが現在値と一致するか確認する。
     private var pendingCandidateRequestId = -1
 
-    /** Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner・IPADIC 辞書を使う constructor。 */
+    // readingLexicon / connectionCostProvider は factory ラムダから遅延生成する。
+    // matrix ロードは重いため engine 構築時ではなく初回 convert() まで先送りする。
+    private val readingLexicon: ReadingLexicon by lazy { readingLexiconFactory() }
+
+    private val connectionCostProvider: ConnectionCostProvider by lazy { connectionCostProviderFactory() }
+
+    // OOV fallback 付き格子（composite）・proposalApplier・legacyResolver は初回 convert() まで遅延して構築する。
+    // readingLexicon / connectionCostProvider も lazy なので、こちらの初期化も自動的に遅延する。
+    // legacyResolver は stateless なので 1 インスタンスを再利用する。
+    private val compositeLexicon: ReadingLexicon by lazy { buildReadingLexiconWithFallback(readingLexicon) }
+
+    private val proposalApplier: ProposalApplier by lazy {
+        ProposalApplier(
+            lexicon = compositeLexicon,
+            costProvider = connectionCostProvider,
+        )
+    }
+
+    private val legacyResolver: LegacyFullTextResolver by lazy { LegacyFullTextResolver(conversionProvider) }
+
+    /**
+     * Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner・IPADIC 辞書を使う constructor。
+     *
+     * lexicon / costProvider は internal constructor のデフォルト factory（`::IpadicReadingLexicon` /
+     * `::defaultConnectionCostProvider`）が適用されるため省略する。
+     * いずれも by lazy フィールドで初回 convert() まで遅延生成されるため、engine 構築コストはゼロ。
+     */
     constructor() : this(
-        defaultConversionProvider(),
-        MomijiSegmenter(),
-        DpReadingAligner(),
-        IpadicHomophoneDictionary(),
+        conversionProvider = defaultConversionProvider(),
+        segmenter = MomijiSegmenter(),
+        aligner = DpReadingAligner(),
+        homophoneDictionary = IpadicHomophoneDictionary(),
     )
 
     fun smokeText(): String {
@@ -156,9 +208,22 @@ class RomaFlowEngine internal constructor(
             return ""
         }
 
-        val request = ConversionRequest(tailReading, prefixContext)
+        // A-5 cutover: conversionProvider.convert() の直接呼び出しを resolver 経由に差し替える。
+        // LegacyFullTextResolver が call1 をラップし、ProposeJointCorrection として返す。
+        // Failure / KeepCurrent は "" を返すことで現状の「空 = 据え置き」と同等の no-op になる。
+        val state = buildResolverState(readingInput, prefixEnd, prefixContext)
+        val request = ResolutionRequest(
+            state = state,
+            inputRevision = 0,
+            graphRevision = 0,
+            candidatePackDigest = 0,
+        )
+        val proposal = legacyResolver.propose(request)
 
-        return conversionProvider.convert(request)
+        return when (proposal) {
+            is ResolutionProposal.ProposeJointCorrection -> proposal.preferredSurface.orEmpty()
+            else -> ""
+        }
     }
 
     fun applyConversion(result: String): String {
@@ -173,8 +238,38 @@ class RomaFlowEngine internal constructor(
 
         val prefixSegments = lockedPrefixSegments()
         val prefixEnd = lockedPrefixEnd()
-        val tailReading = draft.input.readingInput.substring(prefixEnd.coerceIn(0, draft.input.readingInput.length))
-        val tailSegments = buildTailSegments(result, tailReading, prefixEnd)
+        val readingInput = draft.input.readingInput
+        val tailReading = readingInput.substring(prefixEnd.coerceIn(0, readingInput.length))
+        val prefixContext = lockedPrefixContext()
+
+        // A-5 cutover: §6 検証（ProposalApplier）を経由して verified path → projected segments へ変換する。
+        // ProposalApplier の apply 内部は決定論・network なし。
+        // OOV/自由漢字など格子上に完全経路がない場合は legacy buildTailSegments fallback で回帰ゼロを保証する。
+        val proposal = ResolutionProposal.ProposeJointCorrection(
+            sourceSpan = SourceSpan(fromAtomIndex = prefixEnd, toAtomIndex = readingInput.length),
+            intendedReading = tailReading,
+            preferredSurface = result,
+        )
+        val state = buildResolverState(readingInput, prefixEnd, prefixContext)
+        // revision を全て 0 で渡すのは意図的。stale 判定は live 層の pendingConversionRevision（冒頭の guard）が
+        // 担保しているため、ProposalApplier 内部の revision 比較は常に一致（no-op）にしてよい。
+        // 二重の revision 体系を作らず、live 層 1 箇所だけで stale を判定するための設計。
+        val request = ResolutionRequest(
+            state = state,
+            inputRevision = 0,
+            graphRevision = 0,
+            candidatePackDigest = 0,
+        )
+        val resolved = proposalApplier.apply(
+            proposal = proposal,
+            request = request,
+            state = state,
+            currentInputRevision = 0,
+            currentGraphRevision = 0,
+            currentCandidatePackDigest = 0,
+        )
+
+        val tailSegments = buildVerifiedOrFallbackTailSegments(resolved, result, tailReading, prefixEnd)
 
         draft = draft.copy(segments = prefixSegments + tailSegments, selection = Selection.None)
 
@@ -913,6 +1008,132 @@ class RomaFlowEngine internal constructor(
 
     private fun convertedEndOf(segments: List<Segment>): Int {
         return segments.maxOfOrNull { it.range?.endExclusive ?: 0 } ?: 0
+    }
+
+    /**
+     * resolver / applier へ渡す [CompositionState] を最小ブリッジとして構築する。
+     *
+     * [fullReading] は readingInput 全体、[prefixEnd] は locked prefix の終端（0 = lock なし）、
+     * [prefixContext] は locked prefix の surface 連結。[LegacyFullTextResolver] と [ProposalApplier]
+     * は `state.pinnedConstraint.pinnedSurface`（prefixContext）と `lockedPrefixBoundary`（prefixEnd）
+     * のみを参照するため、synthetic な [LexemeEntry] で pinnedPath を埋める。
+     * synthetic の連接 ID は不問（tail path の segment 化に pinnedPath は使わない）。
+     * lock 跨ぎの厳密化は A-5 以降の follow-up（設計ドキュメント参照）。
+     */
+    private fun buildResolverState(
+        fullReading: String,
+        prefixEnd: Int,
+        prefixContext: String,
+    ): CompositionState {
+        val source = CompositionSource.withFrozenPrefix(frozenPrefix = fullReading, revision = 0)
+        val pinnedConstraint = if (prefixEnd <= 0) {
+            PinnedPathConstraint.empty()
+        } else {
+            buildSyntheticPinnedConstraint(fullReading, prefixEnd, prefixContext)
+        }
+
+        return CompositionState.empty().copy(
+            source = source,
+            pinnedConstraint = pinnedConstraint,
+        )
+    }
+
+    private fun buildSyntheticPinnedConstraint(
+        fullReading: String,
+        prefixEnd: Int,
+        prefixContext: String,
+    ): PinnedPathConstraint {
+        // LegacyFullTextResolver が pinnedSurface と lockedPrefixBoundary のみを参照するため、
+        // synthetic entry の連接 ID / posId / wcost は 0 で問題ない。
+        val syntheticLexeme = LexemeEntry(
+            surface = prefixContext,
+            reading = fullReading.substring(0, prefixEnd.coerceIn(0, fullReading.length)),
+            lcAttr = 0,
+            rcAttr = 0,
+            posId = 0,
+            wcost = 0,
+        )
+
+        return PinnedPathConstraint(
+            lockedPrefixBoundary = prefixEnd,
+            pinnedPath = listOf(syntheticLexeme),
+        )
+    }
+
+    /**
+     * ProposalApplier の適用結果から tail segment を構築する。
+     *
+     * [resolved] が verified path を持つ場合（[CompositionState.isConverted] = true）は
+     * [buildTailSegmentsFromPath] で verified path から segment を生成する。
+     * 格子上に経路が存在しない場合（OOV / 自由漢字等）は legacy [buildTailSegments] fallback で
+     * 当該 surface を segment 表示し、変換結果が消えない現状挙動を維持する（回帰ゼロ）。
+     */
+    private fun buildVerifiedOrFallbackTailSegments(
+        resolved: CompositionState,
+        result: String,
+        tailReading: String,
+        offset: Int,
+    ): List<Segment> {
+        val isVerified = resolved.isConverted
+        val selectedPathId = resolved.selectedPathId
+
+        if (!isVerified || selectedPathId == null) {
+            return buildTailSegments(result, tailReading, offset)
+        }
+
+        val verifiedPath = resolved.graph.pathOrNull(selectedPathId)
+
+        if (verifiedPath == null) {
+            return buildTailSegments(result, tailReading, offset)
+        }
+
+        return buildTailSegmentsFromPath(verifiedPath, tailReading, offset)
+    }
+
+    /**
+     * verified path（[LexemeEntry] リスト）から tail [Segment] リストを構築する。
+     *
+     * reading cursor を 0 から進め、各 lexeme について surface・reading・TextRange を確定する。
+     * lexeme の reading はカタカナだが文字数はひらがな mora 数と一致するため、[tailReading]（ひらがな）
+     * を当該長さで切り出して reading とする。range は [offset] 分オフセットして readingInput 全体の絶対座標へ直す。
+     * [LexemeEntry.reading] の長さで切ると cursor が tailReading の長さを
+     * 超える場合は境界でクランプし、残りを 1 segment にまとめる。
+     */
+    private fun buildTailSegmentsFromPath(
+        path: List<LexemeEntry>,
+        tailReading: String,
+        offset: Int,
+    ): List<Segment> {
+        val segments = mutableListOf<Segment>()
+        var readingCursor = 0
+
+        for (lexeme in path) {
+            val segmentStart = readingCursor
+            val segmentEnd = (readingCursor + lexeme.reading.length).coerceAtMost(tailReading.length)
+
+            if (segmentStart >= tailReading.length) break
+
+            val segmentReading = tailReading.substring(segmentStart, segmentEnd)
+            val range = TextRange(
+                startInclusive = segmentStart + offset,
+                endExclusive = segmentEnd + offset,
+                confidence = EXACT_MATCH_CONFIDENCE,
+            )
+
+            segments.add(
+                Segment(
+                    surface = lexeme.surface,
+                    reading = segmentReading,
+                    range = range,
+                    status = SegmentStatus.Converted,
+                    candidates = emptyList(),
+                ),
+            )
+
+            readingCursor = segmentEnd
+        }
+
+        return segments
     }
 
     private fun buildSmokeText(platformName: String): String {
