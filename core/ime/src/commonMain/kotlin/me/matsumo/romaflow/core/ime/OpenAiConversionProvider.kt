@@ -123,18 +123,14 @@ internal class OpenAiConversionProvider(
         val regions = request.regions
 
         if (regions.isEmpty() || config.apiKey.isBlank()) {
-            return FactorizedRerankResult(choices = emptyMap())
+            return FactorizedRerankResult(decisions = emptyMap())
         }
 
-        val result = runCatching {
-            requestFactorizedRerank(request.template, request.prefixContext, regions)
-        }
-        val factorizedResult = result.getOrElse {
-            Napier.w("OpenAI factorized rerank failed", it)
-            FactorizedRerankResult(choices = emptyMap())
-        }
-
-        return factorizedResult
+        return runCatching { requestFactorizedRerank(request.template, request.prefixContext, regions) }
+            .getOrElse {
+                Napier.w("OpenAI factorized rerank failed", it)
+                FactorizedRerankResult(decisions = emptyMap())
+            }
     }
 
     private suspend fun requestFactorizedRerank(
@@ -165,7 +161,8 @@ internal class OpenAiConversionProvider(
         return parseFactorizedRerankResult(content, regions)
     }
 
-    // テンプレート + 全 region の候補を LLM に提示するユーザーコンテンツを構築する（§8 の検証済み形式）。
+    // テンプレート + 全 region の参考候補（hint）を LLM に提示するユーザーコンテンツを構築する。
+    // hint は先頭 min(4, options.size) 件のみ（参考と明記）。
     private fun buildFactorizedRerankUserContent(
         template: String,
         prefixContext: String,
@@ -180,23 +177,47 @@ internal class OpenAiConversionProvider(
         builder.appendLine("テンプレート: $template")
 
         for (region in regions) {
-            builder.appendLine("region ${region.id} (読み: ${region.reading}):")
+            val hintOptions = region.options.take(4)
+            val hintSurfaces = hintOptions.joinToString(", ") { it.surface }
 
-            for (option in region.options) {
-                builder.appendLine("    ${option.id}: ${option.surface}")
-            }
+            builder.appendLine("region ${region.id} (読み: ${region.reading}) 参考候補: $hintSurfaces")
         }
+
+        builder.appendLine("※参考候補は一例。読みが一致すれば候補外の表記を提案してよい。")
 
         return builder.toString().trimEnd()
     }
 
-    // Structured Outputs で {"choices":[{"region_id":"r0","option_id":"r0o0"},...]} を強制する
-    // json_schema を構築する（strict=true）。region_id / option_id は文字列のため region には依存しない。
+    // Structured Outputs で {"decisions":[{"region_id": string, "surface": string}]} を強制する
+    // json_schema を構築する（strict=true）。surface は enum 制約なし（自由表層）。
     private fun buildFactorizedRerankResponseFormat(): JsonObject {
+        val regionIdProperty = buildJsonObject { put("type", "string") }
+        val surfaceProperty = buildJsonObject { put("type", "string") }
+        val decisionProperties = buildJsonObject {
+            put("region_id", regionIdProperty)
+            put("surface", surfaceProperty)
+        }
+        val decisionSchema = buildJsonObject {
+            put("type", "object")
+            put("properties", decisionProperties)
+            put("required", JsonArray(listOf(JsonPrimitive("region_id"), JsonPrimitive("surface"))))
+            put("additionalProperties", false)
+        }
+        val decisionsProperty = buildJsonObject {
+            put("type", "array")
+            put("items", decisionSchema)
+        }
+        val properties = buildJsonObject { put("decisions", decisionsProperty) }
+        val schema = buildJsonObject {
+            put("type", "object")
+            put("properties", properties)
+            put("required", JsonArray(listOf(JsonPrimitive("decisions"))))
+            put("additionalProperties", false)
+        }
         val jsonSchema = buildJsonObject {
-            put("name", "factorized_rerank_selection")
+            put("name", "factorized_surface_proposal")
             put("strict", true)
-            put("schema", buildFactorizedRerankSchema())
+            put("schema", schema)
         }
 
         return buildJsonObject {
@@ -205,85 +226,41 @@ internal class OpenAiConversionProvider(
         }
     }
 
-    private fun buildFactorizedRerankSchema(): JsonObject {
-        val regionIdProperty = buildJsonObject { put("type", "string") }
-        val optionIdProperty = buildJsonObject { put("type", "string") }
-        val choiceProperties = buildJsonObject {
-            put("region_id", regionIdProperty)
-            put("option_id", optionIdProperty)
-        }
-        val choiceSchema = buildJsonObject {
-            put("type", "object")
-            put("properties", choiceProperties)
-            put(
-                "required",
-                JsonArray(listOf(JsonPrimitive("region_id"), JsonPrimitive("option_id"))),
-            )
-            put("additionalProperties", false)
-        }
-        val choicesProperty = buildJsonObject {
-            put("type", "array")
-            put("items", choiceSchema)
-        }
-        val properties = buildJsonObject {
-            put("choices", choicesProperty)
-        }
-
-        return buildJsonObject {
-            put("type", "object")
-            put("properties", properties)
-            put("required", JsonArray(listOf(JsonPrimitive("choices"))))
-            put("additionalProperties", false)
-        }
-    }
-
     // LLM の返答 JSON をパースして FactorizedRerankResult に変換する。
-    // parse 失敗・option_id 範囲外・region 欠落は当該 region を未選択（choices に含めない）扱いとする。
+    // parse 失敗・未知 region_id・blank surface は当該 region を未採用（decisions に含めない）扱いとする。
     private fun parseFactorizedRerankResult(content: String, regions: List<DecisionRegion>): FactorizedRerankResult {
         if (content.isBlank()) {
-            return FactorizedRerankResult(choices = emptyMap())
+            return FactorizedRerankResult(decisions = emptyMap())
         }
 
-        val validOptionIds = buildValidOptionIdSet(regions)
+        val validRegionIds = regions.mapTo(mutableSetOf()) { it.id }
 
-        val parsedChoices = runCatching {
+        val decisions = runCatching {
             val json = Json { ignoreUnknownKeys = true }
-            val obj = json.parseToJsonElement(content).jsonObject
-            val choicesArray = obj["choices"]?.jsonArray ?: return FactorizedRerankResult(choices = emptyMap())
+            val arr = json.parseToJsonElement(content).jsonObject["decisions"]?.jsonArray
+                ?: return FactorizedRerankResult(decisions = emptyMap())
 
-            buildChoicesMap(choicesArray, validOptionIds)
-        }.getOrElse { return FactorizedRerankResult(choices = emptyMap()) }
+            buildDecisionsMap(arr, validRegionIds)
+        }.getOrElse { return FactorizedRerankResult(decisions = emptyMap()) }
 
-        return FactorizedRerankResult(choices = parsedChoices)
+        return FactorizedRerankResult(decisions = decisions)
     }
 
-    private fun buildValidOptionIdSet(regions: List<DecisionRegion>): Set<String> {
-        val validOptionIds = mutableSetOf<String>()
-
-        for (region in regions) {
-            for (option in region.options) {
-                validOptionIds.add(option.id)
-            }
-        }
-
-        return validOptionIds
-    }
-
-    private fun buildChoicesMap(
-        choicesArray: JsonArray,
-        validOptionIds: Set<String>,
+    private fun buildDecisionsMap(
+        decisionsArray: JsonArray,
+        validRegionIds: Set<String>,
     ): Map<String, String> {
         val result = mutableMapOf<String, String>()
 
-        for (element in choicesArray) {
-            val choiceObj = element.jsonObject
-            val regionId = choiceObj["region_id"]?.jsonPrimitive?.content ?: continue
-            val optionId = choiceObj["option_id"]?.jsonPrimitive?.content ?: continue
+        for (element in decisionsArray) {
+            val obj = element.jsonObject
+            val regionId = obj["region_id"]?.jsonPrimitive?.content ?: continue
+            val surface = obj["surface"]?.jsonPrimitive?.content ?: continue
 
-            val isValidOption = optionId in validOptionIds
+            val isValidRegion = regionId in validRegionIds
 
-            if (isValidOption) {
-                result[regionId] = optionId
+            if (isValidRegion && surface.isNotBlank()) {
+                result[regionId] = surface
             }
         }
 
@@ -549,16 +526,21 @@ internal class OpenAiConversionProvider(
                 "出力は {\"candidates\":[...]} という JSON のみとし、説明・前置きは出力しないこと。"
 
         /**
-         * factorized rerank（候補選択・region 分割）専用の system prompt。
+         * factorized rerank（surface 提案・region 分割）専用の system prompt。
          *
-         * テンプレート全体と各 region の候補を提示し、region ごとに最も自然な option を1つずつ選ばせる。
-         * §8 の検証済みプロンプト形式をそのまま使う。
+         * テンプレート全体と各 region の参考候補（hint）を提示し、region ごとに最も自然な表記を提案させる。
+         * closed-set index 選択から open surface 提案へ転換（PR-A）。
          */
         const val FACTORIZED_RERANK_SYSTEM_PROMPT =
-            "あなたは日本語IMEの変換候補選択エンジンです。" +
-                "テンプレート全体（前後の確定文字列）を踏まえ、各 region について最も自然な option を1つずつ選んでください。" +
-                "必ず {\"choices\":[{\"region_id\":\"r0\",\"option_id\":\"r0oN\"},...]} の JSON のみを出力し、説明・前置きは出力しないこと。" +
-                "option_id はリストにあるものだけを使うこと。"
+            "あなたは日本語IMEの変換エンジンです。テンプレート全体（前後の確定文字列）の意味を踏まえ、各 region について" +
+                "最も自然な現代日本語の表記を提案してください。必ず {\"decisions\":[{\"region_id\":\"r0\",\"surface\":\"...\"}]} の" +
+                "JSON のみを出力し、説明・前置きは出力しないこと。" +
+                "- 文全体の意味から、現代日本語で通常使われる表記を選ぶ\n" +
+                "- 人名・固有名詞・専門用語・旧字体は、文脈上必要な場合だけ使う\n" +
+                "- 助詞・助動詞・補助動詞など、かなが自然な箇所はかなを保つ\n" +
+                "- 迷う場合は現在の表記（候補リストの先頭）を維持する\n" +
+                "- 全 region を相互に整合するよう同時に決める\n" +
+                "- surface は読みが region の読みと一致する表記にすること（読みを変えない）"
     }
 }
 

@@ -166,7 +166,7 @@ class FactorizedRegionPackIntegrationTest {
     }
 }
 
-/** 受け取った [FactorizedRerankRequest] を記録し、空 choices を返す provider。 */
+/** 受け取った [FactorizedRerankRequest] を記録し、空 decisions を返す provider。 */
 private class RecordingRegionPackProvider : ConversionProvider {
 
     var lastRequest: FactorizedRerankRequest? = null
@@ -183,6 +183,6 @@ private class RecordingRegionPackProvider : ConversionProvider {
         lastRequest = request
         callCount++
 
-        return FactorizedRerankResult(choices = emptyMap())
+        return FactorizedRerankResult(decisions = emptyMap())
     }
 }

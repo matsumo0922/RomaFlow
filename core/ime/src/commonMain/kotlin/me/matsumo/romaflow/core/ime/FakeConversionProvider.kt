@@ -60,31 +60,31 @@ internal class FakeConversionProvider : ConversionProvider {
     }
 
     /**
-     * 決定的な factorized rerank スタブ。
+     * 決定的な factorized rerank スタブ（open surface 提案版）。
      *
      * テスト・開発用。各 region の reading に対して [FACTORIZED_RERANK_TABLE] から優先 surface を引き、
-     * その surface を持つ option の id を choices として返す。
-     * 表にない読みは当該 region を未選択（choices に含めない）扱いとする。
-     * region が空の場合は空 choices を返す。
+     * その surface を decisions として返す。pack（hint）の option に限定されず、表にある surface を
+     * そのまま返してよい（格子検証は resolver 側が担う）。
+     * 表にない読みは当該 region を未採用（decisions に含めない）扱いとする。
+     * region が空の場合は空 decisions を返す。
      */
     override suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult {
         if (request.regions.isEmpty()) {
-            return FactorizedRerankResult(choices = emptyMap())
+            return FactorizedRerankResult(decisions = emptyMap())
         }
 
-        val choices = buildFactorizedChoices(request)
+        val decisions = buildFactorizedDecisions(request)
 
-        return FactorizedRerankResult(choices = choices)
+        return FactorizedRerankResult(decisions = decisions)
     }
 
-    private fun buildFactorizedChoices(request: FactorizedRerankRequest): Map<String, String> {
+    private fun buildFactorizedDecisions(request: FactorizedRerankRequest): Map<String, String> {
         val result = mutableMapOf<String, String>()
 
         for (region in request.regions) {
-            val preferredSurface = FACTORIZED_RERANK_TABLE[region.reading] ?: continue
-            val matchedOption = region.options.firstOrNull { it.surface == preferredSurface } ?: continue
+            val surface = FACTORIZED_RERANK_TABLE[region.reading] ?: continue
 
-            result[region.id] = matchedOption.id
+            result[region.id] = surface
         }
 
         return result
@@ -133,11 +133,15 @@ internal class FakeConversionProvider : ConversionProvider {
         )
 
         /**
-         * factorized rerank（call3-factorized）の決定的スタブ用変換表。
+         * factorized rerank（call3-factorized）の決定的スタブ用変換表（open surface 提案版）。
          *
-         * region の reading から優先すべき候補表層形を定義する。
-         * 統合テストの回帰ケース「べんきょうしてせいかをあげた → 勉強して成果を上げた」で
-         * せいか→成果 / あげ→上げ の選択を再現するために使う。
+         * region の reading から優先すべき候補表層形を定義する。open surface 版では pack（hint）に
+         * なくても表の surface を decisions として返してよい（格子検証は resolver 側）。
+         *
+         * 回帰エントリ:
+         * - せいか→成果 / あげ→上げ: 「べんきょうしてせいかをあげた→勉強して成果を上げた」
+         * - いか→以下: pack 外 surface 到達検証（以下 が IPADIC にあれば格子検証通過）
+         * - かんじ→漢字 / ぶん→文 / まじり→交じり / かな→かな: 「かんじかなまじりぶん」回帰
          * 「あげた」は IPADIC では「あげ(動詞連用形)＋た(助動詞)」に分割されるため、
          * 動詞 span の reading は「あげ」になる。複合語キー「あげた」も後方互換で残す。
          */
@@ -145,9 +149,13 @@ internal class FakeConversionProvider : ConversionProvider {
             "せいか" to "成果",
             "あげ" to "上げ",
             "あげた" to "上げた",
+            "いか" to "以下",
+            "かんじ" to "漢字",
+            "ぶん" to "文",
+            "まじり" to "交じり",
+            "かな" to "かな",
             "べんきょうして" to "勉強して",
             "てんき" to "天気",
-            "かんじ" to "漢字",
             "わたし" to "私",
             "にほんご" to "日本語",
             "とうきょう" to "東京",

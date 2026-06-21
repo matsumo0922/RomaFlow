@@ -142,6 +142,6 @@ private class RecordingConversionProvider(
     override suspend fun rerankFactorized(
         request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult {
-        return me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
+        return me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
     }
 }

@@ -4,10 +4,11 @@ import me.matsumo.romaflow.core.ime.ConversionProvider
 import me.matsumo.romaflow.core.ime.SourceSpan
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.LexemeEntry
+import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
 
 /**
- * atomic factorized rerank 戦略 resolver（§A-factorized 設計）。
+ * open surface proposal + full-lattice 検証 resolver（§A-rerank 方針転換 PR-A）。
  *
  * ## 動作フロー
  * 1. tail reading（locked prefix を除いた変換対象）を取得する。
@@ -16,11 +17,12 @@ import me.matsumo.romaflow.core.morphology.ReadingLexicon
  *    の箇所だけを [DecisionRegion] に変換する。baseline が漢字を含まない機能語 span（助詞「を」・
  *    する/して の「し」「て」等）と 1 surface のみの span は確定部としてテンプレートに固定する。
  *    これにより LLM が機能語を同音漢字（市/手/死…）へ過変換するのを防ぐ。
+ *    options には literal reading（span のひらがな読みそのもの）を必ず含める（[withLiteralHint]）。
  * 4. region が 0 個なら LLM を呼ばずに baseline surface を [ResolutionProposal.ProposeJointCorrection] で返す。
  * 5. region がある場合は template + regions を [FactorizedRerankRequest] に詰めて
  *    [ConversionProvider.rerankFactorized] を呼ぶ。
- * 6. choices（region ID → option ID）を受け取り、各 region で選択 option の surface を、確定部では baseline
- *    lexeme の surface を採用する。未選択 region・option_id 範囲外も baseline lexeme の surface を使う。
+ * 6. decisions（regionId → 提案 surface）を受け取り、各 region の提案 surface を full lattice で検証する
+ *    （[acceptedRegionSurfaceOrNull]）。格子内なら採用・格子外・長さ不一致は baseline に fallback する。
  * 7. それらを連結した「表層文字列」を [ResolutionProposal.ProposeJointCorrection.preferredSurface] で返す。
  *
  * ## surface-carry 不変条件（path identity は保持しない）
@@ -28,28 +30,23 @@ import me.matsumo.romaflow.core.morphology.ReadingLexicon
  * [ProposalApplier] がその surface から格子上の合法 path を再探索して採用する。`convert()` が String を返し
  * applier が再検証する契約は変えない（[applyConversion] / `buildResolverState` /
  * `buildVerifiedOrFallbackTailSegments` は無改造）。
- * したがって [RegionOption.lexemePath] はここでは surface 抽出にのみ使い、その path identity（連接 ID / POS /
- * lexeme 同一性）は最終状態へ pin しない。選択 subpath を pin した上での未確定区間の constrained Viterbi
- * 再補完は本実装では out of scope（#23 後続）。
+ *
+ * ## open-surface の格子検証
+ * LLM は pack（hint）外の surface も提案できる（例: `以下` が pack になくても提案可能）。
+ * 提案 surface は [ReadingLatticeDecoder.findMinCostPathForSurface] で region の reading span に対して検証し、
+ * 非 null であれば合法（採用）・null は格子外（baseline fallback）とする。
  *
  * ## literal/KEEP baseline
  * OOV / literal の span は baseline lexeme の surface がそのまま候補に含まれる（単一候補 → 確定部扱い）。
  *
  * ## fallback
  * - region 0 個: baseline を surface-carry で返す。
- * - LLM 失敗 / choices 空: baseline を surface-carry で返す。
- * - region 欠落 / option_id 範囲外: その region は baseline lexeme を使う。
- *
- * ## 既知の限界（A 段階の天井・根治は #23 後続の B＝学習スコアラ）
- * - **候補ランキング**: region 候補は辞書 wcost 昇順で最大6件にクランプする。wcost は頻度を反映しないため、
- *   頻出語が珍しい同音語に押し出されて pack から落ちることがある（例: いか の `以下` が `医科`/`烏賊` 等に負ける）。
- *   その場合 LLM はそもそも正解を選べない。頻度・文脈を反映した候補ランキングは B で扱う。
- * - **LLM 選択精度**: pack に正解があっても gpt-5-nano が誤選択することがある（例: かんじ の `漢字` があるのに `換字`)。
- *   非決定的（~80%+）で 100% ではなく、上位モデルでも解消しない。学習/LM ベースのスコア融合は B で扱う。
+ * - LLM 失敗 / decisions 空: baseline を surface-carry で返す。
+ * - region 欠落 / 格子外提案 / reading 長不一致: その region は baseline lexeme を使う。
  *
  * @param conversionProvider LLM 呼び出しを担う provider。rerankFactorized を呼ぶ。
- * @param lexicon 辞書（CompositionGraph 構築用）。
- * @param costProvider 連接コスト provider（Viterbi デコード用）。
+ * @param lexicon 辞書（CompositionGraph 構築用・格子検証用）。
+ * @param costProvider 連接コスト provider（Viterbi デコード用・格子検証用）。
  * @param nBest baseline 構築の N-best 件数（デフォルト: 16）。
  */
 internal class FactorizedRerankResolver(
@@ -168,6 +165,7 @@ internal class FactorizedRerankResolver(
 
             val regionId = "r$regionIndex"
             val options = buildRegionOptions(regionId, allLexemes)
+                .withLiteralHint(regionId, spanReading)
             val region = DecisionRegion(
                 id = regionId,
                 reading = spanReading,
@@ -220,7 +218,8 @@ internal class FactorizedRerankResolver(
         val deferredArchaic = mutableListOf<LexemeEntry>()
 
         for (lexeme in sortedAlternatives) {
-            if (result.size >= MAX_OPTIONS_PER_REGION) break
+            // literal hint 用に1枠残す（withLiteralHint が末尾に追加するため MAX - 1 でクランプ）。
+            if (result.size >= MAX_OPTIONS_PER_REGION - 1) break
 
             val isDuplicateSurface = lexeme.surface in seenSurfaces
 
@@ -238,8 +237,9 @@ internal class FactorizedRerankResolver(
         }
 
         // 旧字体は最大件数に満たない場合のみ追加する（削除ではなく降格）。
+        // literal 用枠は MAX - 1 で確保しているため同じ閾値を使う。
         for (lexeme in deferredArchaic) {
-            if (result.size >= MAX_OPTIONS_PER_REGION) break
+            if (result.size >= MAX_OPTIONS_PER_REGION - 1) break
 
             val isNewSurface = seenSurfaces.add(lexeme.surface)
 
@@ -297,9 +297,30 @@ internal class FactorizedRerankResolver(
     }
 
     /**
-     * factorized rerank リクエストを構築・実行し、選択結果を baseline に差し込んで完全 surface を返す。
+     * options リストに literal reading（span のひらがな読みそのもの）を必ず含める。
      *
-     * LLM 失敗（choices 空）の場合は baseline surface を返す。
+     * open-surface では hint の lexemePath は assembly に使わない（surface だけ LLM へ見せる）ので、
+     * literal option は surface=spanReading の合成で良い。lexemePath は空。
+     * 既に同一 surface を持つ option があれば追加しない（dedup）。
+     */
+    private fun List<RegionOption>.withLiteralHint(regionId: String, spanReading: String): List<RegionOption> {
+        val hasLiteral = any { it.surface == spanReading }
+
+        if (hasLiteral) return this
+
+        val literalOption = RegionOption(
+            id = "${regionId}o$size",
+            surface = spanReading,
+            lexemePath = emptyList(),
+        )
+
+        return this + literalOption
+    }
+
+    /**
+     * factorized rerank リクエストを構築・実行し、提案 surface を格子検証して完全 surface を返す。
+     *
+     * LLM 失敗（decisions 空）の場合は baseline surface を返す。
      */
     private suspend fun resolveWithFactorizedRerank(
         baselineSpans: List<BaselineSpan>,
@@ -313,13 +334,11 @@ internal class FactorizedRerankResolver(
             regions = regions,
         )
 
-        // ConversionProvider の実装は失敗時に空 choices を返す契約だが、ここでの runCatching は
-        // 任意の provider 実装（契約を破って例外を投げるもの）に対する最終防衛網として残す。
-        // どちらの経路でも空 choices に倒し、assembleSurface が baseline へ fallback する。
+        // 任意 provider 実装が契約を破って throw しても最終防衛網として握る（baseline fallback）。
         val result = runCatching { conversionProvider.rerankFactorized(factorizedRequest) }
-        val choices = result.getOrElse { FactorizedRerankResult(choices = emptyMap()) }.choices
+        val decisions = result.getOrElse { FactorizedRerankResult(decisions = emptyMap()) }.decisions
 
-        return assembleSurface(baselineSpans, regions, choices)
+        return assembleSurfaceFromDecisions(baselineSpans, regions, decisions)
     }
 
     /**
@@ -349,15 +368,14 @@ internal class FactorizedRerankResolver(
     }
 
     /**
-     * choices（region ID → option ID）を使い、選択 option の surface（確定部は baseline lexeme の surface）を
-     * 連結した表層文字列を返す。返すのは surface のみで path identity は持たない（applier が後段で再探索する）。
-     *
-     * 未選択 region・option_id 範囲外 → baseline lexeme の surface を使う。
+     * decisions（regionId → 提案 surface）を baseline に差し込んで全文 tail surface を組む。
+     * 各 region の提案 surface は full lattice で検証し、合法なら採用・非合法/未提案は baseline へ fallback する。
+     * 返すのは surface のみ（path identity は持たない。applier が後段で全文を再検証する）。
      */
-    private fun assembleSurface(
+    private fun assembleSurfaceFromDecisions(
         baselineSpans: List<BaselineSpan>,
         regions: List<DecisionRegion>,
-        choices: Map<String, String>,
+        decisions: Map<String, String>,
     ): String {
         val regionsByStart = regions.associateBy { it.readingStart }
         val builder = StringBuilder()
@@ -370,20 +388,31 @@ internal class FactorizedRerankResolver(
                 continue
             }
 
-            val selectedOptionId = choices[region.id]
-            val selectedOption = region.options.firstOrNull { it.id == selectedOptionId }
+            val proposed = decisions[region.id]
+            val accepted = proposed?.let { acceptedRegionSurfaceOrNull(region, it) }
 
-            if (selectedOption == null) {
-                // 未選択・範囲外 → baseline lexeme を使う
-                builder.append(span.lexeme.surface)
-            } else {
-                for (lexeme in selectedOption.lexemePath) {
-                    builder.append(lexeme.surface)
-                }
-            }
+            builder.append(accepted ?: span.lexeme.surface)
         }
 
         return builder.toString()
+    }
+
+    /**
+     * region の提案 surface が、その region の reading span の合法な実現なら surface を返す。さもなくば null。
+     * 検証は [ReadingLatticeDecoder.findMinCostPathForSurface] の非 null 性で行う
+     * （reading 長不一致・格子外は null）。
+     */
+    private fun acceptedRegionSurfaceOrNull(region: DecisionRegion, proposed: String): String? {
+        if (proposed.isBlank()) return null
+
+        val found = ReadingLatticeDecoder.findMinCostPathForSurface(
+            reading = region.reading,
+            surface = proposed,
+            lexicon = lexicon,
+            costProvider = costProvider,
+        )
+
+        return if (found != null) proposed else null
     }
 
     /**
