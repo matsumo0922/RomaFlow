@@ -219,7 +219,7 @@ internal class FactorizedRerankResolver(
      * surface dedup・旧字体降格・最大6件でクランプした hint pack を構築する。
      *
      * ## ΔC の計算
-     * `ΔC(lex) = arcMarginals[ArcKey(span.readingStart, span.readingEnd, lex.surface)] - globalBest`。
+     * `ΔC(lexeme) = arcMarginals[ArcKey(span.readingStart, span.readingEnd, lexeme.surface)] - globalBest`。
      * arcMarginals に該当エントリがなければ [Long.MAX_VALUE] とし最劣後扱いにする。
      * [globalBest] が [Long.MAX_VALUE] の場合は比較不能のため ΔC も [Long.MAX_VALUE] にする。
      *
@@ -243,14 +243,14 @@ internal class FactorizedRerankResolver(
         arcMarginals: Map<ArcKey, Long>,
         globalBest: Long,
     ): List<LexemeEntry> {
-        fun deltaC(lex: LexemeEntry): Long {
+        fun deltaC(lexeme: LexemeEntry): Long {
             val isGlobalBestInvalid = globalBest == Long.MAX_VALUE
             if (isGlobalBestInvalid) return Long.MAX_VALUE
 
             val arcKey = ArcKey(
                 startOffset = span.readingStart,
                 endOffset = span.readingEnd,
-                surface = lex.surface,
+                surface = lexeme.surface,
             )
             val forced = arcMarginals[arcKey] ?: Long.MAX_VALUE
 
@@ -269,33 +269,33 @@ internal class FactorizedRerankResolver(
         val sortedByDelta = alternatives.sortedBy { deltaC(it) }
         val deferredArchaic = mutableListOf<LexemeEntry>()
 
-        for (lex in sortedByDelta) {
+        for (lexeme in sortedByDelta) {
             // literal hint 用に1枠残す（withLiteralHint が末尾に追加するため MAX - 1 でクランプ）
             if (result.size >= MAX_OPTIONS_PER_REGION - 1) break
 
-            val isDuplicateSurface = lex.surface in seenSurfaces
+            val isDuplicateSurface = lexeme.surface in seenSurfaces
 
             if (isDuplicateSurface) continue
 
-            val isArchaicForm = isArchaicKanji(lex.surface)
+            val isArchaicForm = isArchaicKanji(lexeme.surface)
 
             if (isArchaicForm) {
-                deferredArchaic.add(lex)
+                deferredArchaic.add(lexeme)
                 continue
             }
 
-            seenSurfaces.add(lex.surface)
-            result.add(lex)
+            seenSurfaces.add(lexeme.surface)
+            result.add(lexeme)
         }
 
         // 旧字体は最大件数に満たない場合のみ追加する（削除ではなく降格）
-        for (lex in deferredArchaic) {
+        for (lexeme in deferredArchaic) {
             if (result.size >= MAX_OPTIONS_PER_REGION - 1) break
 
-            val isNewSurface = seenSurfaces.add(lex.surface)
+            val isNewSurface = seenSurfaces.add(lexeme.surface)
 
             if (isNewSurface) {
-                result.add(lex)
+                result.add(lexeme)
             }
         }
 
