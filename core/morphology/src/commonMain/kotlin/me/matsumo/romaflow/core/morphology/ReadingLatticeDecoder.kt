@@ -1,6 +1,23 @@
 package me.matsumo.romaflow.core.morphology
 
 /**
+ * 格子上の 1 アーク（lexeme が覆う span）を一意に識別するキー。
+ *
+ * [startOffset] と [endOffset] は tail reading（ひらがな）の mora 座標（exclusive end）。
+ * [surface] は対応する lexeme の表層形。
+ * 同一 surface が複数の [ReadingLatticeDecoder] 内部 node を通じて格子に現れた場合、
+ * [ReadingLatticeDecoder.arcMarginalCosts] は最小コストを採用する。
+ */
+data class ArcKey(
+    /** アーク開始 mora offset（inclusive）。 */
+    val startOffset: Int,
+    /** アーク終了 mora offset（exclusive）。 */
+    val endOffset: Int,
+    /** 表層形。 */
+    val surface: String,
+)
+
+/**
  * 読み（ひらがな）から lexical lattice を構築し、Viterbi アルゴリズムで最小コスト経路を求める。
  *
  * [ReadingLexicon] と [ConnectionCostProvider] を受け取り、reading 座標の lexical lattice を
@@ -84,6 +101,68 @@ object ReadingLatticeDecoder {
         val minSuffixCost = computeMinSuffixCost(reading.length, beginNodes, endNodes, costProvider)
 
         return collectNBestPaths(reading.length, beginNodes, costProvider, minSuffixCost, n)
+    }
+
+    /**
+     * tail reading の格子で、各アークを通る最小コスト全文 path のコストを返す。
+     *
+     * ## アルゴリズム
+     * 前向き DP（[runForwardPass]）で各 node に `node.minCost`（BOS→node 終端の最小 prefix コスト、
+     * BOS 連接コスト + 語コスト + incoming 最良連接コスト込み）を設定し、後ろ向き DP（[computeMinSuffixCost]）
+     * で `suffixCost[node]`（node 終端→EOS の最小コスト、EOS 連接コスト込み）を求める。
+     * 各アーク（node）の最小全文コストは `node.minCost + suffixCost[node]`。
+     *
+     * ## 注意事項
+     * - forward[startNode] 相当の BOS→node コストは node.minCost に畳み込み済み（二重加算しない）。
+     * - EOS 連接コストは suffixCost に含む（二重加算しない）。
+     * - suffixCost が [Long.MAX_VALUE] の node（EOS まで到達不能）はアーク除外する。
+     * - overflow 防止: minCost と suffixCost の両方が [Long.MAX_VALUE] でない場合のみ加算する。
+     * - 同一 [ArcKey]（同一 span・同一 surface）が複数 node から現れた場合は最小コストを採用する。
+     *
+     * @param reading ひらがな reading（格子の主軸）
+     * @param lexicon reading 座標の辞書
+     * @param costProvider 連接コスト提供者
+     * @return (startOffset, endOffset, surface) → 最小全文コスト の map（到達不能アークは含まない）
+     */
+    fun arcMarginalCosts(
+        reading: String,
+        lexicon: ReadingLexicon,
+        costProvider: ConnectionCostProvider,
+    ): Map<ArcKey, Long> {
+        if (reading.isEmpty()) return emptyMap()
+
+        val (beginNodes, endNodes) = buildNodes(reading, lexicon)
+
+        runForwardPass(reading, beginNodes, endNodes, costProvider)
+
+        val suffixCost = computeMinSuffixCost(reading.length, beginNodes, endNodes, costProvider)
+        val result = HashMap<ArcKey, Long>()
+
+        for (nodeList in beginNodes) {
+            for (node in nodeList) {
+                val forward = node.minCost
+                val suffix = suffixCost[node] ?: Long.MAX_VALUE
+
+                val isForwardReachable = forward != Long.MAX_VALUE
+                val isSuffixReachable = suffix != Long.MAX_VALUE
+
+                if (!isForwardReachable || !isSuffixReachable) continue
+
+                val fullPathCost = forward + suffix
+                val arcKey = ArcKey(
+                    startOffset = node.startOffset,
+                    endOffset = node.endOffset,
+                    surface = node.lexeme.surface,
+                )
+                val existing = result[arcKey]
+
+                if (existing == null || fullPathCost < existing) {
+                    result[arcKey] = fullPathCost
+                }
+            }
+        }
+
+        return result
     }
 
     /**

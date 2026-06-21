@@ -2,6 +2,7 @@ package me.matsumo.romaflow.core.ime.shadow
 
 import me.matsumo.romaflow.core.ime.ConversionProvider
 import me.matsumo.romaflow.core.ime.SourceSpan
+import me.matsumo.romaflow.core.morphology.ArcKey
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.LexemeEntry
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
@@ -86,8 +87,11 @@ internal class FactorizedRerankResolver(
         val bestPathId = graph.bestPathId ?: return ResolutionProposal.Failure(kind = FailureKind.NoSuitablePath)
         val baselinePath = graph.pathOrNull(bestPathId) ?: return ResolutionProposal.Failure(kind = FailureKind.NoSuitablePath)
 
+        val arcMarginals = ReadingLatticeDecoder.arcMarginalCosts(tailReading, lexicon, costProvider)
+        val globalBest = graph.costOrNull(bestPathId) ?: Long.MAX_VALUE
+
         val baselineSpans = buildBaselineSpans(tailReading, baselinePath)
-        val regions = extractDecisionRegions(tailReading, baselineSpans)
+        val regions = extractDecisionRegions(tailReading, baselineSpans, arcMarginals, globalBest)
 
         val preferredSurface = if (regions.isEmpty()) {
             buildSurfaceFromPath(baselinePath)
@@ -141,8 +145,15 @@ internal class FactorizedRerankResolver(
      * baseline が純ひらがな以外（漢字を含む、またはカタカナ）の span のうち、同一 reading span に 2 件以上の
      * surface がある場合のみ [DecisionRegion] とする。baseline が純ひらがなの機能語 span（[isAllHiragana] が
      * true。する/して の「し」「て」・助詞「を」等）と 1 件のみ（baseline のみ）の span は確定部としてスキップする。
+     *
+     * [arcMarginals] と [globalBest] を受け取り、[buildHintPack] でΔCベースの候補選抜を行う（PR-C）。
      */
-    private fun extractDecisionRegions(tailReading: String, baselineSpans: List<BaselineSpan>): List<DecisionRegion> {
+    private fun extractDecisionRegions(
+        tailReading: String,
+        baselineSpans: List<BaselineSpan>,
+        arcMarginals: Map<ArcKey, Long>,
+        globalBest: Long,
+    ): List<DecisionRegion> {
         val regions = mutableListOf<DecisionRegion>()
         var regionIndex = 0
 
@@ -157,7 +168,12 @@ internal class FactorizedRerankResolver(
 
             val spanReading = tailReading.substring(span.readingStart, span.readingEnd)
             val alternativeLexemes = collectAlternativeLexemes(tailReading, span)
-            val allLexemes = buildDedupedLexemeList(span.lexeme, alternativeLexemes)
+            val allLexemes = buildHintPack(
+                span = span,
+                alternatives = alternativeLexemes,
+                arcMarginals = arcMarginals,
+                globalBest = globalBest,
+            )
 
             val hasMultipleSurfaces = allLexemes.size >= 2
 
@@ -199,26 +215,62 @@ internal class FactorizedRerankResolver(
     }
 
     /**
-     * baseline lexeme を先頭に、代替 lexeme を cost 昇順に並べ、surface dedup・旧字体降格・最大6件でクランプした
-     * リストを構築する。
+     * baseline lexeme を先頭に、代替 lexeme をΔC（文脈つき強制全文パスコスト差）昇順で選抜し、
+     * surface dedup・旧字体降格・最大6件でクランプした hint pack を構築する。
      *
-     * baseline の surface は必ず含める（issue #23 A 受入条件）。
+     * ## ΔC の計算
+     * `ΔC(lexeme) = arcMarginals[ArcKey(span.readingStart, span.readingEnd, lexeme.surface)] - globalBest`。
+     * arcMarginals に該当エントリがなければ [Long.MAX_VALUE] とし最劣後扱いにする。
+     * [globalBest] が [Long.MAX_VALUE] の場合は比較不能のため ΔC も [Long.MAX_VALUE] にする。
+     *
+     * ## quota（最大 [MAX_OPTIONS_PER_REGION] = 6）
+     * - baseline: 必ず先頭に1枠
+     * - ΔC 上位（非旧字体）: [MAX_OPTIONS_PER_REGION] - 1 枠まで（literal hint 用に1枠確保）
+     * - 旧字体: deferred 降格（非旧字体が [MAX_OPTIONS_PER_REGION] - 1 に満たない場合のみ追加）
+     * - literal hint（spanReading そのもの）: [withLiteralHint] が末尾に保証
+     *
+     * ## クランプ順序（重要）
+     * ΔC ソートを先に行い、その後でクランプする（wcost でクランプしてから ΔC ソートすると意味がない）。
+     *
+     * @param span baseline span（readingStart/readingEnd で arc を特定）
+     * @param alternatives 同一 reading span を覆う baseline 以外の lexeme（件数未絞り）
+     * @param arcMarginals reading 全体の arc 最良全文コスト map（[ReadingLatticeDecoder.arcMarginalCosts] 出力）
+     * @param globalBest 全文の最良コスト（[CompositionGraph.costOrNull] の最安経路コスト）
      */
-    private fun buildDedupedLexemeList(baselineLexeme: LexemeEntry, alternatives: List<LexemeEntry>): List<LexemeEntry> {
+    private fun buildHintPack(
+        span: BaselineSpan,
+        alternatives: List<LexemeEntry>,
+        arcMarginals: Map<ArcKey, Long>,
+        globalBest: Long,
+    ): List<LexemeEntry> {
+        fun deltaC(lexeme: LexemeEntry): Long {
+            val isGlobalBestInvalid = globalBest == Long.MAX_VALUE
+            if (isGlobalBestInvalid) return Long.MAX_VALUE
+
+            val arcKey = ArcKey(
+                startOffset = span.readingStart,
+                endOffset = span.readingEnd,
+                surface = lexeme.surface,
+            )
+            val forced = arcMarginals[arcKey] ?: Long.MAX_VALUE
+
+            return if (forced == Long.MAX_VALUE) Long.MAX_VALUE else forced - globalBest
+        }
+
         val seenSurfaces = mutableSetOf<String>()
         val result = mutableListOf<LexemeEntry>()
 
-        // baseline を必ず先頭に含める
-        seenSurfaces.add(baselineLexeme.surface)
-        result.add(baselineLexeme)
+        // baseline を必ず先頭に含める（ΔC に依らず固定）
+        seenSurfaces.add(span.lexeme.surface)
+        result.add(span.lexeme)
 
-        // 代替を cost 昇順で並べ、1 pass 目では非旧字体だけを追加する。
+        // ΔC 昇順でソートし、クランプ前に全候補に適用する（wcost クランプより前に ΔC ソートを行う）。
         // 旧字体は seenSurfaces を汚さずに deferredArchaic へ退避し、枠が余れば 2 pass 目で追加する（真の降格）。
-        val sortedAlternatives = alternatives.sortedBy { it.wcost }
+        val sortedByDelta = alternatives.sortedBy { deltaC(it) }
         val deferredArchaic = mutableListOf<LexemeEntry>()
 
-        for (lexeme in sortedAlternatives) {
-            // literal hint 用に1枠残す（withLiteralHint が末尾に追加するため MAX - 1 でクランプ）。
+        for (lexeme in sortedByDelta) {
+            // literal hint 用に1枠残す（withLiteralHint が末尾に追加するため MAX - 1 でクランプ）
             if (result.size >= MAX_OPTIONS_PER_REGION - 1) break
 
             val isDuplicateSurface = lexeme.surface in seenSurfaces
@@ -236,8 +288,7 @@ internal class FactorizedRerankResolver(
             result.add(lexeme)
         }
 
-        // 旧字体は最大件数に満たない場合のみ追加する（削除ではなく降格）。
-        // literal 用枠は MAX - 1 で確保しているため同じ閾値を使う。
+        // 旧字体は最大件数に満たない場合のみ追加する（削除ではなく降格）
         for (lexeme in deferredArchaic) {
             if (result.size >= MAX_OPTIONS_PER_REGION - 1) break
 
