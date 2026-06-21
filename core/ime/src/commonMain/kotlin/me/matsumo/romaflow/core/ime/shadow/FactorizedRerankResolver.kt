@@ -274,6 +274,9 @@ internal class FactorizedRerankResolver(
             regions = regions,
         )
 
+        // ConversionProvider の実装は失敗時に空 choices を返す契約だが、ここでの runCatching は
+        // 任意の provider 実装（契約を破って例外を投げるもの）に対する最終防衛網として残す。
+        // どちらの経路でも空 choices に倒し、assembleSurface が baseline へ fallback する。
         val result = runCatching { conversionProvider.rerankFactorized(factorizedRequest) }
         val choices = result.getOrElse { FactorizedRerankResult(choices = emptyMap()) }.choices
 
