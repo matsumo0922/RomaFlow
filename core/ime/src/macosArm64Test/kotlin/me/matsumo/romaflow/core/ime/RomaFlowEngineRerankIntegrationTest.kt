@@ -162,6 +162,7 @@ private class AlwaysFailRerankStub : ConversionProvider {
         request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
         me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }
 
 /**

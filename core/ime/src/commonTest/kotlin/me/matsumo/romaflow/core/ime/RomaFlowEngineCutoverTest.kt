@@ -279,6 +279,8 @@ private class PassThroughConversionProvider : ConversionProvider {
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult {
         return me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
     }
+
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }
 
 /**
@@ -304,6 +306,10 @@ private object FailingConversionProvider : ConversionProvider {
         request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult {
         error("rerankFactorized failed for testing")
+    }
+
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String {
+        error("proposeFullTailSurface failed for testing")
     }
 }
 

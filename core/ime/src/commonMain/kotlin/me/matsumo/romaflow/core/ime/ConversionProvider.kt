@@ -58,6 +58,16 @@ internal interface ConversionProvider {
      * region 欠落・格子外提案・読み長不一致の場合も呼び出し側が当該 region を baseline へ fallback する。
      */
     suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult
+
+    /**
+     * 全文 tail を1個の表層として提案する（call1 相当だが resolver 側で格子検証する）。
+     *
+     * [reading] はひらがなの tail 読み、[prefixContext] は確定済み prefix の表層文字列（lock なしは空文字）。
+     * 提案は resolver 側が full lattice で検証し、格子外・読み長不一致の場合は baseline へ fallback する。
+     * 失敗した場合（API key 未設定・ネットワークエラー・タイムアウト等）は空文字を返す。
+     * 呼び出し側は空文字を「baseline（Viterbi rank-0）で代替」として扱う。
+     */
+    suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String
 }
 
 /**

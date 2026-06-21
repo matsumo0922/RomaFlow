@@ -179,6 +179,7 @@ private class FixedConversionProvider(private val fixedResult: String) : Convers
         request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
         me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }
 
 /**
@@ -195,6 +196,7 @@ private object AlwaysFailRerankProvider : ConversionProvider {
         request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
         me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }
 
 /** 「天気」を 1 token で分割する [Segmenter]。 */

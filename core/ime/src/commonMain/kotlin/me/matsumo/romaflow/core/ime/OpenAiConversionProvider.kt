@@ -119,6 +119,17 @@ internal class OpenAiConversionProvider(
         return rerankIndex
     }
 
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String {
+        if (reading.isBlank() || config.apiKey.isBlank()) {
+            return ""
+        }
+
+        return runCatching { requestConversion(reading, prefixContext) }
+            .onFailure { Napier.w("OpenAI proposeFullTailSurface failed", it) }
+            .getOrElse { "" }
+            .trim()
+    }
+
     override suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult {
         val regions = request.regions
 

@@ -78,6 +78,31 @@ internal class FakeConversionProvider : ConversionProvider {
         return FactorizedRerankResult(decisions = decisions)
     }
 
+    /**
+     * 全文 tail を1個の表層として提案する決定的スタブ。
+     *
+     * テスト・開発用。[CONVERSION_TABLE] を用いた連結変換（[convert] 相当）の結果を返す。
+     * 格子検証は resolver 側が行うため、ここでは変換表に基づく文字列を素直に返す。
+     * [prefixContext] は使用しない（スタブのため文脈依存変換は行わない）。
+     */
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String {
+        if (reading.isBlank()) {
+            return ""
+        }
+
+        return buildConvertedSurface(reading)
+    }
+
+    private fun buildConvertedSurface(reading: String): String {
+        var converted = reading
+
+        for ((hiragana, kanji) in CONVERSION_TABLE) {
+            converted = converted.replace(hiragana, kanji)
+        }
+
+        return converted
+    }
+
     private fun buildFactorizedDecisions(request: FactorizedRerankRequest): Map<String, String> {
         val result = mutableMapOf<String, String>()
 

@@ -576,6 +576,8 @@ private class RecordingFactorizedProvider : ConversionProvider {
         lastRequest = request
         return FactorizedRerankResult(decisions = emptyMap())
     }
+
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }
 
 /**
@@ -595,6 +597,8 @@ private class FixedDecisionsProvider(
     override suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult {
         return FactorizedRerankResult(decisions = fixedDecisions)
     }
+
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }
 
 /**
@@ -609,4 +613,6 @@ private class EmptyDecisionsProvider : ConversionProvider {
     override suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult {
         return FactorizedRerankResult(decisions = emptyMap())
     }
+
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }

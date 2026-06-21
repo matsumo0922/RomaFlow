@@ -39,7 +39,7 @@ class TwoStepToolLoopResolverTest {
             paths = listOf(100L to listOf(lexeme)),
         )
 
-        val provider = RecordingConversionProvider(convertResult = targetSurface)
+        val provider = TwoStepRecordingConversionProvider(convertResult = targetSurface)
         val resolver = TwoStepToolLoopResolver(provider)
         val state = buildStateWithGraph(reading = "てんき", graph = graph)
         val request = buildRequest(state)
@@ -68,7 +68,7 @@ class TwoStepToolLoopResolverTest {
             paths = listOf(100L to listOf(lexeme)),
         )
 
-        val provider = RecordingConversionProvider(convertResult = "転機") // graph に存在しない
+        val provider = TwoStepRecordingConversionProvider(convertResult = "転機") // graph に存在しない
         val resolver = TwoStepToolLoopResolver(provider)
         val state = buildStateWithGraph(reading = "てんき", graph = graph)
         val request = buildRequest(state)
@@ -122,7 +122,7 @@ class TwoStepToolLoopResolverTest {
  * [convert] は [convertResult] を返す。[candidates] が呼ばれたかどうかを [candidatesCalled] で記録する。
  * candidates が呼ばれた場合は空 JSON を返し、テスト検証後に 2 往復目が起動されたことを確認できる。
  */
-private class RecordingConversionProvider(
+private class TwoStepRecordingConversionProvider(
     private val convertResult: String,
 ) : ConversionProvider {
 
@@ -144,4 +144,6 @@ private class RecordingConversionProvider(
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult {
         return me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
     }
+
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }
