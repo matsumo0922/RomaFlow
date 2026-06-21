@@ -40,6 +40,13 @@ import me.matsumo.romaflow.core.morphology.ReadingLexicon
  * - LLM 失敗 / choices 空: baseline を surface-carry で返す。
  * - region 欠落 / option_id 範囲外: その region は baseline lexeme を使う。
  *
+ * ## 既知の限界（A 段階の天井・根治は #23 後続の B＝学習スコアラ）
+ * - **候補ランキング**: region 候補は辞書 wcost 昇順で最大6件にクランプする。wcost は頻度を反映しないため、
+ *   頻出語が珍しい同音語に押し出されて pack から落ちることがある（例: いか の `以下` が `医科`/`烏賊` 等に負ける）。
+ *   その場合 LLM はそもそも正解を選べない。頻度・文脈を反映した候補ランキングは B で扱う。
+ * - **LLM 選択精度**: pack に正解があっても gpt-5-nano が誤選択することがある（例: かんじ の `漢字` があるのに `換字`)。
+ *   非決定的（~80%+）で 100% ではなく、上位モデルでも解消しない。学習/LM ベースのスコア融合は B で扱う。
+ *
  * @param conversionProvider LLM 呼び出しを担う provider。rerankFactorized を呼ぶ。
  * @param lexicon 辞書（CompositionGraph 構築用）。
  * @param costProvider 連接コスト provider（Viterbi デコード用）。
@@ -134,20 +141,22 @@ internal class FactorizedRerankResolver(
     /**
      * baseline の各 span に対して同一 reading span を覆う別 surface を収集し、[DecisionRegion] を構築する。
      *
-     * baseline が漢字を含む content 語 span のうち、同一 reading span に 2 件以上の surface がある場合のみ
-     * [DecisionRegion] とする。baseline が漢字を含まない機能語 span（[containsKanji] が false）と
-     * 1 件のみ（baseline のみ）の span は確定部としてスキップする。
+     * baseline が純ひらがな以外（漢字を含む、またはカタカナ）の span のうち、同一 reading span に 2 件以上の
+     * surface がある場合のみ [DecisionRegion] とする。baseline が純ひらがなの機能語 span（[isAllHiragana] が
+     * true。する/して の「し」「て」・助詞「を」等）と 1 件のみ（baseline のみ）の span は確定部としてスキップする。
      */
     private fun extractDecisionRegions(tailReading: String, baselineSpans: List<BaselineSpan>): List<DecisionRegion> {
         val regions = mutableListOf<DecisionRegion>()
         var regionIndex = 0
 
         for (span in baselineSpans) {
-            // baseline が漢字を含まない span（助詞「を」・する/して の「し」「て」等の機能語）は region 化しない。
-            // これらに同音漢字（市/手/死…）を候補提示すると LLM が機能語を過変換するため、確定部として固定する。
-            val baselineHasKanji = containsKanji(span.lexeme.surface)
+            // baseline が純ひらがなの span（する/して の「し」「て」・助詞「を」等の機能語）は region 化しない。
+            // これらに同音漢字（市/手/死…）を候補提示すると LLM が機能語を過変換するため確定部に固定する。
+            // 一方、カタカナ baseline（content 語が誤って片仮名 rank-0 になった イカ=以下 / カナ=仮名 等）は
+            // 正しい漢字・かな代替を候補に出すため region 化する（純ひらがなだけを機能語とみなす）。
+            val baselineIsFunctionKana = isAllHiragana(span.lexeme.surface)
 
-            if (!baselineHasKanji) continue
+            if (baselineIsFunctionKana) continue
 
             val spanReading = tailReading.substring(span.readingStart, span.readingEnd)
             val alternativeLexemes = collectAlternativeLexemes(tailReading, span)
@@ -205,33 +214,37 @@ internal class FactorizedRerankResolver(
         seenSurfaces.add(baselineLexeme.surface)
         result.add(baselineLexeme)
 
-        // 代替を cost 昇順で追加（surface dedup・旧字体降格）
+        // 代替を cost 昇順で並べ、1 pass 目では非旧字体だけを追加する。
+        // 旧字体は seenSurfaces を汚さずに deferredArchaic へ退避し、枠が余れば 2 pass 目で追加する（真の降格）。
         val sortedAlternatives = alternatives.sortedBy { it.wcost }
+        val deferredArchaic = mutableListOf<LexemeEntry>()
 
         for (lexeme in sortedAlternatives) {
             if (result.size >= MAX_OPTIONS_PER_REGION) break
 
-            val isNewSurface = seenSurfaces.add(lexeme.surface)
+            val isDuplicateSurface = lexeme.surface in seenSurfaces
 
-            if (!isNewSurface) continue
+            if (isDuplicateSurface) continue
 
             val isArchaicForm = isArchaicKanji(lexeme.surface)
 
-            if (isArchaicForm) continue
+            if (isArchaicForm) {
+                deferredArchaic.add(lexeme)
+                continue
+            }
 
+            seenSurfaces.add(lexeme.surface)
             result.add(lexeme)
         }
 
-        // 旧字体も最大件数に満たない場合は追加する（多様性確保）
-        if (result.size < MAX_OPTIONS_PER_REGION) {
-            for (lexeme in sortedAlternatives) {
-                if (result.size >= MAX_OPTIONS_PER_REGION) break
+        // 旧字体は最大件数に満たない場合のみ追加する（削除ではなく降格）。
+        for (lexeme in deferredArchaic) {
+            if (result.size >= MAX_OPTIONS_PER_REGION) break
 
-                val isNewSurface = seenSurfaces.add(lexeme.surface)
+            val isNewSurface = seenSurfaces.add(lexeme.surface)
 
-                if (isNewSurface) {
-                    result.add(lexeme)
-                }
+            if (isNewSurface) {
+                result.add(lexeme)
             }
         }
 
@@ -239,42 +252,31 @@ internal class FactorizedRerankResolver(
     }
 
     /**
-     * surface が漢字（CJK 統合漢字・拡張面・互換漢字）を1文字でも含むかを判定する。
+     * surface が純ひらがな（ひらがなブロックの文字のみ）かどうかを判定する。
      *
-     * region 化対象を content 語（漢字を含む baseline）に限定するために使う。
-     * ひらがな・カタカナのみの surface（機能語の「し」「て」「を」等）は false。
+     * region 化対象から機能語 span（する/して の「し」「て」・助詞「を」等、辞書 rank-0 が入力かなのまま）を
+     * 除外するために使う。漢字を含む surface・カタカナ surface（イカ=以下 等の content 語）は false。
      */
-    private fun containsKanji(surface: String): Boolean {
-        return surface.any { character -> isKanji(character) }
-    }
+    private fun isAllHiragana(surface: String): Boolean {
+        if (surface.isEmpty()) return false
 
-    /**
-     * 1 文字が漢字（CJK 統合漢字・拡張 A/B・互換漢字）かどうかを判定する。
-     */
-    private fun isKanji(character: Char): Boolean {
-        val codePoint = character.code
-        val isUnified = codePoint in 0x4E00..0x9FFF
-        val isExtensionA = codePoint in 0x3400..0x4DBF
-        val isExtensionB = codePoint in 0x20000..0x2A6DF
-        val isCompatibility = codePoint in 0xF900..0xFAFF
-
-        return isUnified || isExtensionA || isExtensionB || isCompatibility
+        return surface.all { character -> character.code in 0x3041..0x309F }
     }
 
     /**
      * 旧字体・異体字かどうかを判定する。
      *
      * 実機問題（top-40 flat rerank が `聖歌を擧げた` を選んで悪化）の背景に沿い、IPADIC に現れやすい
-     * 代表的な旧字体・異体字（[ARCHAIC_KANJI]）を降格対象とする。加えて CJK 拡張 A/B 面の文字も
-     * 旧字体・異体字が多いため降格候補とみなす。常用表記が別途あれば pack の枠を消費させない。
+     * 代表的な旧字体・異体字（[ARCHAIC_KANJI]）を降格対象とする。加えて CJK 拡張 A 面（基本多言語面・
+     * `Char` で表現可能）の文字も旧字体・異体字が多いため降格候補とみなす。常用表記が別途あれば pack の枠を
+     * 消費させない。なお拡張 B 面（U+20000 以降）は `Char` が surrogate pair になり単一 code では届かないため、
+     * BMP の `ARCHAIC_KANJI` と拡張 A のみを対象とする。
      */
     private fun isArchaicKanji(surface: String): Boolean {
         return surface.any { character ->
-            val codePoint = character.code
-            val isExtensionA = codePoint in 0x3400..0x4DBF
-            val isExtensionB = codePoint in 0x20000..0x2A6DF
+            val isExtensionA = character.code in 0x3400..0x4DBF
 
-            character in ARCHAIC_KANJI || isExtensionA || isExtensionB
+            character in ARCHAIC_KANJI || isExtensionA
         }
     }
 
