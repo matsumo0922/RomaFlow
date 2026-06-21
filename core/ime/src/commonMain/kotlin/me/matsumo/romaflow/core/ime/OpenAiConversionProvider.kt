@@ -124,10 +124,18 @@ internal class OpenAiConversionProvider(
             return ""
         }
 
-        return runCatching { requestConversion(reading, prefixContext) }
-            .onFailure { Napier.w("OpenAI proposeFullTailSurface failed", it) }
-            .getOrElse { "" }
-            .trim()
+        val result = runCatching { requestConversion(reading, prefixContext) }
+        val converted = result.getOrNull()
+
+        if (converted == null) {
+            Napier.w("OpenAI proposeFullTailSurface failed", result.exceptionOrNull())
+
+            return ""
+        }
+
+        // convert() と同じく echo された prefix を除去する。reconversion prompt は prefix+tail を返し得るが、
+        // resolver は tailReading に対して検証するため、prefix が残ると検証に落ちて baseline へ倒れる。
+        return stripEchoedPrefix(converted, prefixContext).trim()
     }
 
     override suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult {

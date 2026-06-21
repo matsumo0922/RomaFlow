@@ -19,6 +19,7 @@ import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
 import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
+import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
 import platform.posix.getenv
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -54,7 +55,10 @@ import kotlin.time.TimeSource
  */
 class A4ResolverComparisonTest {
 
-    private val lexicon by lazy { IpadicReadingLexicon() }
+    // RomaFlowEngine と同じ composite lexicon（literal fallback 付き）を使う。
+    // raw IpadicReadingLexicon だと ASCII_DIGIT_SYMBOL / PROPER_NOUN の OOV に literal arc が無く、
+    // graph 無効 → 未変換で「正解」と数えたり literal 提案を不当に拒否したりして metrics が production を反映しない。
+    private val lexicon by lazy { buildReadingLexiconWithFallback(IpadicReadingLexicon()) }
     private val costProvider by lazy { MomijiConnectionCostProvider.load() }
 
     /**
