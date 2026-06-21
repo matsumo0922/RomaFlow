@@ -114,18 +114,12 @@ class RomaFlowEngineFactorizedIntegrationTest {
             "convert() が非空を返すこと（実際: '$convertResult'）",
         )
 
-        // いか→以下 が pack 外でも採用されることを確認する（open surface 到達可 or IPADIC に 以下/いか がない場合は別語確認）。
-        // IPADIC に 以下/いか があれば `以下` を含む変換結果になるはずである。
-        // なければ baseline（イカ等）になるため、テストは convertResult が非空であることのみ強制する。
-        if (convertResult.contains("以下")) {
-            assertTrue(
-                convertResult.contains("以下"),
-                "いか が 以下 に変換されること（open surface 格子内到達）（実際: '$convertResult'）",
-            )
-        } else {
-            // IPADIC に 以下/いか が無い場合: baseline の表層が採用されていることを確認する
-            println("[INFO] いか→以下 は IPADIC に存在しないため baseline が採用された（実際: '$convertResult'）")
-        }
+        // PR-A 天井解消の確定検証: `以下` は IPADIC で wcost が高く closed-set pack（最大6件）外だが、
+        // open surface では decisions に含まれ findMinCostPathForSurface("いか","以下") が非 null を返すため採用される。
+        assertTrue(
+            convertResult.contains("以下"),
+            "いか が 以下 に変換されること（open surface 格子内到達）（実際: '$convertResult'）",
+        )
 
         engine.applyConversion(convertResult)
         assertTrue(engine.isConverted(), "applyConversion で isConverted=true になること")
