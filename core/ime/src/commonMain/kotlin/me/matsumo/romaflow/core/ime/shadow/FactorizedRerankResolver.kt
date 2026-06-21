@@ -12,8 +12,10 @@ import me.matsumo.romaflow.core.morphology.ReadingLexicon
  * ## 動作フロー
  * 1. tail reading（locked prefix を除いた変換対象）を取得する。
  * 2. `CompositionGraph.build` で baseline（Viterbi rank-0 経路）を取得する。
- * 3. baseline の各 span を走査し、同一 reading span に複数 surface がある箇所を [DecisionRegion] に変換する。
- *    1 surface のみの span は確定部としてテンプレートに固定する。
+ * 3. baseline の各 span を走査し、同一 reading span に複数 surface がある **content 語**（baseline が漢字を含む）
+ *    の箇所だけを [DecisionRegion] に変換する。baseline が漢字を含まない機能語 span（助詞「を」・
+ *    する/して の「し」「て」等）と 1 surface のみの span は確定部としてテンプレートに固定する。
+ *    これにより LLM が機能語を同音漢字（市/手/死…）へ過変換するのを防ぐ。
  * 4. region が 0 個なら LLM を呼ばずに baseline surface を [ResolutionProposal.ProposeJointCorrection] で返す。
  * 5. region がある場合は template + regions を [FactorizedRerankRequest] に詰めて
  *    [ConversionProvider.rerankFactorized] を呼ぶ。
@@ -132,14 +134,21 @@ internal class FactorizedRerankResolver(
     /**
      * baseline の各 span に対して同一 reading span を覆う別 surface を収集し、[DecisionRegion] を構築する。
      *
-     * 同一 reading span に 2 件以上の surface がある場合のみ [DecisionRegion] とし、
-     * 1 件のみ（baseline のみ）の場合は確定部としてスキップする。
+     * baseline が漢字を含む content 語 span のうち、同一 reading span に 2 件以上の surface がある場合のみ
+     * [DecisionRegion] とする。baseline が漢字を含まない機能語 span（[containsKanji] が false）と
+     * 1 件のみ（baseline のみ）の span は確定部としてスキップする。
      */
     private fun extractDecisionRegions(tailReading: String, baselineSpans: List<BaselineSpan>): List<DecisionRegion> {
         val regions = mutableListOf<DecisionRegion>()
         var regionIndex = 0
 
         for (span in baselineSpans) {
+            // baseline が漢字を含まない span（助詞「を」・する/して の「し」「て」等の機能語）は region 化しない。
+            // これらに同音漢字（市/手/死…）を候補提示すると LLM が機能語を過変換するため、確定部として固定する。
+            val baselineHasKanji = containsKanji(span.lexeme.surface)
+
+            if (!baselineHasKanji) continue
+
             val spanReading = tailReading.substring(span.readingStart, span.readingEnd)
             val alternativeLexemes = collectAlternativeLexemes(tailReading, span)
             val allLexemes = buildDedupedLexemeList(span.lexeme, alternativeLexemes)
@@ -230,19 +239,42 @@ internal class FactorizedRerankResolver(
     }
 
     /**
-     * 旧字体・異体字かどうかを簡易判定する。
+     * surface が漢字（CJK 統合漢字・拡張面・互換漢字）を1文字でも含むかを判定する。
      *
-     * 常用漢字外の漢字（基本 CJK 統合漢字の拡張面）を含む場合を旧字体候補とみなす。
-     * 完全な旧字体リストは持たず、同音の常用表記がある場合の降格用の簡易フィルタ。
+     * region 化対象を content 語（漢字を含む baseline）に限定するために使う。
+     * ひらがな・カタカナのみの surface（機能語の「し」「て」「を」等）は false。
+     */
+    private fun containsKanji(surface: String): Boolean {
+        return surface.any { character -> isKanji(character) }
+    }
+
+    /**
+     * 1 文字が漢字（CJK 統合漢字・拡張 A/B・互換漢字）かどうかを判定する。
+     */
+    private fun isKanji(character: Char): Boolean {
+        val codePoint = character.code
+        val isUnified = codePoint in 0x4E00..0x9FFF
+        val isExtensionA = codePoint in 0x3400..0x4DBF
+        val isExtensionB = codePoint in 0x20000..0x2A6DF
+        val isCompatibility = codePoint in 0xF900..0xFAFF
+
+        return isUnified || isExtensionA || isExtensionB || isCompatibility
+    }
+
+    /**
+     * 旧字体・異体字かどうかを判定する。
+     *
+     * 実機問題（top-40 flat rerank が `聖歌を擧げた` を選んで悪化）の背景に沿い、IPADIC に現れやすい
+     * 代表的な旧字体・異体字（[ARCHAIC_KANJI]）を降格対象とする。加えて CJK 拡張 A/B 面の文字も
+     * 旧字体・異体字が多いため降格候補とみなす。常用表記が別途あれば pack の枠を消費させない。
      */
     private fun isArchaicKanji(surface: String): Boolean {
         return surface.any { character ->
             val codePoint = character.code
-            // CJK Unified Ideographs Extension-A/B は旧字体・異体字が多い
             val isExtensionA = codePoint in 0x3400..0x4DBF
             val isExtensionB = codePoint in 0x20000..0x2A6DF
 
-            isExtensionA || isExtensionB
+            character in ARCHAIC_KANJI || isExtensionA || isExtensionB
         }
     }
 
@@ -371,6 +403,20 @@ internal class FactorizedRerankResolver(
 
         /** region ごとの最大候補件数（§4.2）。 */
         const val MAX_OPTIONS_PER_REGION = 6
+
+        /**
+         * region 候補から降格する代表的な旧字体・異体字。
+         *
+         * IPADIC に現れやすく、同音の常用表記（新字体）が別途存在するものを中心に列挙する。
+         * これらは 1 pass 目では pack に入れず、枠が余った 2 pass 目でのみ追加する。
+         * 完全網羅は目的でなく、`擧`（聖歌を擧げた の擧）など実機で悪さをした旧字体の取りこぼし防止が主眼。
+         */
+        val ARCHAIC_KANJI = setOf(
+            '擧', '國', '體', '萬', '圖', '學', '寫', '廣', '區', '來',
+            '應', '會', '變', '數', '鐵', '觀', '醫', '藝', '戰', '燈',
+            '號', '處', '證', '雜', '缺', '舊', '黨', '當', '兒', '齒',
+            '廳', '臺', '禮', '彈', '聲', '櫻', '澤', '濱', '齋', '惠',
+        )
     }
 }
 
