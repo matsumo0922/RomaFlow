@@ -59,25 +59,80 @@ class FactorizedRegionPackIntegrationTest {
         assertTrue(seikaRegion.options.size <= 6, "せいか region は最大6件（実際: ${seikaRegion.options.size}）")
         assertTrue(seikaSurfaces.contains("成果"), "せいか region に「成果」が含まれること（実際: $seikaSurfaces）")
 
-        // content 語「あげ」の候補に「上げ」「挙げ」「揚げ」が含まれる
+        // content 語「あげ」の候補に「上げ」「挙げ」「揚げ」が全て含まれる
         val ageRegion = request.regions.firstOrNull { it.reading == "あげ" }
         assertNotNull(ageRegion, "「あげ」が region 化されること（実際の region 読み: $regionReadings）")
         val ageSurfaces = ageRegion.options.map { it.surface }
-        assertTrue(ageSurfaces.contains("上げ"), "あげ region に「上げ」が含まれること（実際: $ageSurfaces）")
+        for (expectedSurface in listOf("上げ", "挙げ", "揚げ")) {
+            assertTrue(
+                ageSurfaces.contains(expectedSurface),
+                "あげ region に「$expectedSurface」が含まれること（実際: $ageSurfaces）",
+            )
+        }
 
-        // 旧字体「擧」は現代表記より前に出ない（含まれる場合のみ検証）
-        assertArchaicNotBeforeModern(ageSurfaces, archaic = "擧", modern = listOf("上げ", "挙げ", "揚げ"))
+        // 旧字体（例: 擧 を含む surface）は現代表記より前に出ない（含まれる場合のみ検証）
+        assertArchaicCharNotBeforeModern(ageSurfaces, archaicChar = '擧', modern = listOf("上げ", "挙げ", "揚げ"))
 
         // すべての region が 1 回の request に同時提示される（recording は 1 回だけ呼ばれる）
         assertTrue(recording.callCount == 1, "全 region が 1 回の rerankFactorized 呼び出しで提示されること（実際: ${recording.callCount}）")
     }
 
-    private fun assertArchaicNotBeforeModern(
+    /**
+     * カタカナ baseline の content 語が region 化され、正しい漢字代替が候補に出ることを検証する。
+     *
+     * 辞書 Viterbi rank-0 が誤って片仮名になる語（いか→イカ、かな→カナ）は、純ひらがなでないため region 化され、
+     * 正解候補（以下 / 仮名）が pack に入る。これにより「カタカナで固定されて正解を選べない」過去の不具合
+     * （いかのしりょうによれば→イカの…、かんじかなまじりぶん→…カナ…）を防ぐ。
+     * なお最終的にどれが選ばれるかは LLM 依存（本テストは候補被覆のみを決定論で保証する）。
+     */
+    @Test
+    fun katakanaBaselineContentWords_areRegionizedWithKanjiAlternatives() = runBlocking {
+        val recordingForIka = RecordingRegionPackProvider()
+        FactorizedRerankResolver(recordingForIka, lexicon, costProvider)
+            .propose(buildRequest("いかのしりょうによれば"))
+        val ikaRequest = assertNotNull(recordingForIka.lastRequest, "content 語の曖昧 span があり request が作られること")
+        printRegionPack(ikaRequest)
+
+        // ① 検証: カタカナ baseline の「いか」が確定部に固定されず region 化されること（イカ ロック解消）。
+        // 注: 正解「以下」が最大6件に入るかは候補ランキング（wcost）依存で、本テストでは保証しない（既知の限界 ②）。
+        val ikaRegion = ikaRequest.regions.firstOrNull { it.reading == "いか" }
+        assertNotNull(ikaRegion, "カタカナ baseline の「いか」が region 化されること（読み: ${ikaRequest.regions.map { it.reading }}）")
+        assertTrue(
+            ikaRegion.options.size >= 2,
+            "いか region に複数候補が提示されること（実際: ${ikaRegion.options.map { it.surface }}）",
+        )
+
+        val recordingForKanji = RecordingRegionPackProvider()
+        FactorizedRerankResolver(recordingForKanji, lexicon, costProvider)
+            .propose(buildRequest("かんじかなまじりぶん"))
+        val kanjiRequest = assertNotNull(recordingForKanji.lastRequest, "request が作られること")
+        printRegionPack(kanjiRequest)
+
+        val kanaRegion = kanjiRequest.regions.firstOrNull { it.reading == "かな" }
+        assertNotNull(kanaRegion, "カタカナ baseline の「かな」が region 化されること（読み: ${kanjiRequest.regions.map { it.reading }}）")
+
+        val kanjiRegion = kanjiRequest.regions.firstOrNull { it.reading == "かんじ" }
+        assertNotNull(kanjiRegion, "「かんじ」が region 化されること")
+        assertTrue(
+            kanjiRegion.options.any { it.surface == "漢字" },
+            "かんじ region に「漢字」が含まれること（実際: ${kanjiRegion.options.map { it.surface }}）",
+        )
+
+        val bunRegion = kanjiRequest.regions.firstOrNull { it.reading == "ぶん" }
+        assertNotNull(bunRegion, "「ぶん」が region 化されること")
+        assertTrue(
+            bunRegion.options.any { it.surface == "文" },
+            "ぶん region に「文」が含まれること（実際: ${bunRegion.options.map { it.surface }}）",
+        )
+    }
+
+    private fun assertArchaicCharNotBeforeModern(
         surfaces: List<String>,
-        archaic: String,
+        archaicChar: Char,
         modern: List<String>,
     ) {
-        val archaicIndex = surfaces.indexOf(archaic)
+        // 旧字体 char を含む surface（例: 擧げ）を部分一致で探す。exact 一致だと擧げ等を取りこぼす。
+        val archaicIndex = surfaces.indexOfFirst { surface -> surface.contains(archaicChar) }
 
         if (archaicIndex < 0) return
 
@@ -85,7 +140,7 @@ class FactorizedRegionPackIntegrationTest {
 
         assertTrue(
             firstModernIndex != null && archaicIndex > firstModernIndex,
-            "旧字体「$archaic」は現代表記より後ろであること（surfaces: $surfaces）",
+            "旧字体「$archaicChar」を含む候補は現代表記より後ろであること（surfaces: $surfaces）",
         )
     }
 

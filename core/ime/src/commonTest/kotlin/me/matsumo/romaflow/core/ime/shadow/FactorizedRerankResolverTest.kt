@@ -157,6 +157,42 @@ class FactorizedRerankResolverTest {
     }
 
     /**
+     * 旧字体が「削除」ではなく「降格」されることを確認する（非旧字体が最大件数未満なら枠が余り旧字体が後段に入る）。
+     *
+     * [ArchaicDemotionLexicon] は "あ" に 亜(wcost5)・阿(wcost10)・擧(wcost20, 旧字体) を返す。
+     * 非旧字体は 亜・阿 の2件のみで6件に満たないため、旧字体 擧 は降格されつつ pack に残るべき。
+     * 旧 2-pass 実装（seenSurfaces を汚すバグ）では 擧 が削除され options に出てこない。
+     */
+    @Test
+    fun archaicKanjiIsDemotedNotDeleted() {
+        runBlocking {
+            val recordingProvider = RecordingFactorizedProvider()
+            val lexicon = buildReadingLexiconWithFallback(ArchaicDemotionLexicon)
+            val costProvider = ZeroConnectionCostProvider
+            val resolver = FactorizedRerankResolver(
+                conversionProvider = recordingProvider,
+                lexicon = lexicon,
+                costProvider = costProvider,
+            )
+
+            resolver.propose(buildRequest(buildStateWithReading("あ")))
+
+            val region = recordingProvider.lastRequest?.regions?.firstOrNull()
+            assertTrue(region != null, "region が生成されること")
+
+            val surfaces = region.options.map { it.surface }
+            assertTrue(surfaces.contains("擧"), "旧字体「擧」が削除されず pack に残ること（降格、実際: $surfaces）")
+
+            val archaicIndex = surfaces.indexOf("擧")
+            val modernIndex = surfaces.indexOf("阿")
+            assertTrue(
+                archaicIndex > modernIndex,
+                "旧字体「擧」は非旧字体「阿」より後ろに降格されること（実際: $surfaces）",
+            )
+        }
+    }
+
+    /**
      * choices が返ると選択 option の surface が preferredSurface に反映されることを確認する。
      *
      * [AmbiguousSpanLexicon] で "あい" に "愛"(rank-0) と "藍"(rank-1) がある。
@@ -343,6 +379,30 @@ private object ManyAlternativesLexicon : ReadingLexicon {
             wcost = (index + 1) * 10,
         )
     }
+
+    override fun commonPrefixSearch(reading: String, startOffset: Int): List<LexemeMatch> {
+        val suffix = reading.substring(startOffset)
+
+        if (!suffix.startsWith("あ")) return emptyList()
+
+        return lexemes.map { lexeme ->
+            LexemeMatch(readingEndOffset = startOffset + 1, lexeme = lexeme)
+        }
+    }
+}
+
+/**
+ * "あ"（1文字）に 亜(wcost5)・阿(wcost10)・擧(wcost20, 旧字体) を返すテスト用 lexicon。
+ *
+ * 非旧字体（亜・阿）が6件未満なので、旧字体 擧 が削除されず降格されて pack に残ることの確認に使う。
+ */
+private object ArchaicDemotionLexicon : ReadingLexicon {
+
+    private val lexemes = listOf(
+        LexemeEntry(surface = "亜", reading = "ア", lcAttr = 0, rcAttr = 0, posId = 0, wcost = 5),
+        LexemeEntry(surface = "阿", reading = "ア", lcAttr = 0, rcAttr = 0, posId = 0, wcost = 10),
+        LexemeEntry(surface = "擧", reading = "ア", lcAttr = 0, rcAttr = 0, posId = 0, wcost = 20),
+    )
 
     override fun commonPrefixSearch(reading: String, startOffset: Int): List<LexemeMatch> {
         val suffix = reading.substring(startOffset)
