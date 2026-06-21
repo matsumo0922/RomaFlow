@@ -108,7 +108,7 @@ class RomaFlowEngineFactorizedLiveTest {
         val LIVE_CASES = listOf(
             LiveCase(romaji = "benkyoushiteseikawoageta", expected = "勉強して成果を上げた"),
             LiveCase(romaji = "ikanoshiryouniyoreba", expected = "以下の資料によれば"),
-            LiveCase(romaji = "kanjikanamajiribu", expected = "漢字かな交じり文"),
+            LiveCase(romaji = "kanjikanamajiribun", expected = "漢字かな交じり文"),
         )
     }
 }

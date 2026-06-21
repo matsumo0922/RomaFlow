@@ -47,13 +47,15 @@ internal interface ConversionProvider {
     suspend fun rerank(request: RerankRequest): Int
 
     /**
-     * factorized rerank（call3-factorized）。曖昧箇所を region に因数分解し、全 region を 1 回の LLM
-     * 呼び出しで同時提示して region ごとの選択 tuple を得る（§A-factorized 設計）。
+     * factorized rerank（call3-factorized / open surface proposal）。曖昧箇所を region に因数分解し、
+     * 全 region を 1 回の LLM 呼び出しで同時提示して region ごとの **提案 surface** を得る
+     * （§A-rerank 方針転換 PR-A）。提案 surface は pack（hint）外でもよく、呼び出し側が full lattice で
+     * 検証して採否を決める。
      *
      * 失敗した場合（API key 未設定・ネットワークエラー・タイムアウト・parse 失敗・region 空等）は
-     * [FactorizedRerankResult] の choices が空のインスタンスを返す。
-     * 呼び出し側は choices 空を「baseline（Viterbi rank-0）で代替」として扱う。
-     * option_id が region のリスト外・region 欠落の場合も呼び出し側が当該 region を未選択扱いにする。
+     * [FactorizedRerankResult] の decisions が空のインスタンスを返す。
+     * 呼び出し側は decisions 空を「baseline（Viterbi rank-0）で代替」として扱う。
+     * region 欠落・格子外提案・読み長不一致の場合も呼び出し側が当該 region を baseline へ fallback する。
      */
     suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult
 }

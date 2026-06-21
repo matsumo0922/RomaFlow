@@ -30,7 +30,7 @@ class RomaFlowEngineFactorizedIntegrationTest {
     private val costProvider by lazy { MomijiConnectionCostProvider.load() }
 
     /**
-     * 回帰テスト主役: `べんきょうしてせいかをあげた` が Fake choices で `勉強して成果を上げた` になること。
+     * 回帰テスト主役: `べんきょうしてせいかをあげた` が Fake decisions で `勉強して成果を上げた` になること。
      *
      * [FakeConversionProvider.FACTORIZED_RERANK_TABLE] には
      * せいか→成果 / あげた→上げた が設定されている。
@@ -133,7 +133,7 @@ class RomaFlowEngineFactorizedIntegrationTest {
      */
     @Test
     fun factorized_emptyDecisions_fallsBackToBaseline() = runBlocking {
-        val provider = AlwaysEmptyChoiceProvider()
+        val provider = AlwaysEmptyDecisionProvider()
         val engine = buildFactorizedEngine(provider)
 
         engine.inputRomaji("tenki")
@@ -161,7 +161,7 @@ class RomaFlowEngineFactorizedIntegrationTest {
      */
     @Test
     fun factorized_oovAscii_literalPreserved() = runBlocking {
-        val provider = AlwaysEmptyChoiceProvider()
+        val provider = AlwaysEmptyDecisionProvider()
         val engine = buildFactorizedEngine(provider)
 
         val preeditAfterInput = engine.inputRomaji("ok")
@@ -212,11 +212,11 @@ private object FactorizedPassthroughSegmenter : Segmenter {
 }
 
 /**
- * rerankFactorized が常に空 choices を返す [ConversionProvider] スタブ。
+ * rerankFactorized が常に空 decisions を返す [ConversionProvider] スタブ。
  *
- * factorized fallback（choices 空 → baseline）をテストするために使う。
+ * factorized fallback（decisions 空 → baseline）をテストするために使う。
  */
-private class AlwaysEmptyChoiceProvider : ConversionProvider {
+private class AlwaysEmptyDecisionProvider : ConversionProvider {
     override suspend fun convert(request: ConversionRequest): String = ""
     override suspend fun candidates(request: WordCandidateRequest): String = ""
     override suspend fun rerank(request: RerankRequest): Int = -1
