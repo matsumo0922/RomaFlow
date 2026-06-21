@@ -5,6 +5,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import me.matsumo.romaflow.core.ime.shadow.CompositionGraph
 import me.matsumo.romaflow.core.ime.shadow.CompositionState
+import me.matsumo.romaflow.core.ime.shadow.ConversionResolver
+import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResolver
 import me.matsumo.romaflow.core.ime.shadow.LegacyFullTextResolver
 import me.matsumo.romaflow.core.ime.shadow.PinnedPathConstraint
 import me.matsumo.romaflow.core.ime.shadow.ProposalApplier
@@ -46,6 +48,20 @@ import me.matsumo.romaflow.core.morphology.defaultConnectionCostProvider
  * inputRomaji / deleteBackward / candidates / lock / marked-text / Swift adapter の shadow 化、
  * atom 座標化・lock 跨ぎ厳密化・preview surface、OneShotJointPatch 本実装は A-5 以降の follow-up。
  */
+/**
+ * rerank の動作モード。
+ *
+ * - [Factorized]: atomic factorized rerank（既定）。曖昧箇所を region に因数分解して各 region を LLM に選ばせる。
+ * - [Flat]: 全文 N-best から1つ選ぶ flat rerank（比較・回帰用に残す）。
+ */
+internal enum class RerankMode {
+    /** atomic factorized rerank（既定）。 */
+    Factorized,
+
+    /** 全文 N-best rerank（比較・回帰用）。 */
+    Flat,
+}
+
 class RomaFlowEngine internal constructor(
     private val conversionProvider: ConversionProvider,
     private val segmenter: Segmenter,
@@ -53,6 +69,8 @@ class RomaFlowEngine internal constructor(
     private val homophoneDictionary: HomophoneDictionary = EmptyHomophoneDictionary,
     private val readingLexiconFactory: () -> ReadingLexicon = ::IpadicReadingLexicon,
     private val connectionCostProviderFactory: () -> ConnectionCostProvider = ::defaultConnectionCostProvider,
+    /** rerank の動作モード。既定は [RerankMode.Factorized]（factorized rerank）。 */
+    private val rerankMode: RerankMode = RerankMode.Factorized,
 ) {
 
     private val converter = RomajiKanaConverter()
@@ -108,14 +126,31 @@ class RomaFlowEngine internal constructor(
     @Suppress("UnusedPrivateProperty")
     private val legacyResolver: LegacyFullTextResolver by lazy { LegacyFullTextResolver(conversionProvider) }
 
-    // 既定 resolver（A-rerank）。格子 N-best から LLM に index で選ばせ、捏造を構造的に防ぐ。
-    // legacyResolver は A4 比較用に残す。
-    private val rerankResolver: RerankResolver by lazy {
+    // flat rerank resolver（A-rerank）。格子 N-best から LLM に index で選ばせ、捏造を構造的に防ぐ。
+    // A4 比較用・flat モード切替用に残す。
+    private val flatRerankResolver: RerankResolver by lazy {
         RerankResolver(
             conversionProvider = conversionProvider,
             lexicon = compositeLexicon,
             costProvider = connectionCostProvider,
         )
+    }
+
+    // factorized rerank resolver（既定）。曖昧箇所を region に因数分解し LLM に region ごとに選ばせる。
+    private val factorizedRerankResolver: FactorizedRerankResolver by lazy {
+        FactorizedRerankResolver(
+            conversionProvider = conversionProvider,
+            lexicon = compositeLexicon,
+            costProvider = connectionCostProvider,
+        )
+    }
+
+    // feature flag で flat / factorized を切替。既定は factorized（§5）。
+    private val activeResolver: ConversionResolver by lazy {
+        when (rerankMode) {
+            RerankMode.Factorized -> factorizedRerankResolver
+            RerankMode.Flat -> flatRerankResolver
+        }
     }
 
     /**
@@ -225,10 +260,11 @@ class RomaFlowEngine internal constructor(
             return ""
         }
 
-        // A-rerank cutover: LegacyFullTextResolver から RerankResolver（既定）に差し替える。
-        // RerankResolver は graph N-best（+ literal/KEEP baseline）から LLM に index で選ばせ、捏造を構造的に防ぐ。
+        // A-rerank cutover: LegacyFullTextResolver から activeResolver（既定 factorized）に差し替える。
+        // factorizedRerankResolver は曖昧箇所を region に因数分解し LLM に region ごとに選ばせ、捏造を構造的に防ぐ。
+        // flatRerankResolver は feature flag（rerankMode=Flat）での比較・回帰用に残す。
         // legacyResolver は A4 比較用に残す（参照あり: A4ResolverComparisonTest）。
-        // rerank 失敗時: RerankResolver 内で Viterbi rank-0 surface に fallback し ProposeJointCorrection を返す。
+        // rerank 失敗時: resolver 内で Viterbi rank-0 surface に fallback し ProposeJointCorrection を返す。
         // Failure（hasValidPath=false 等）/ KeepCurrent は "" を返すことで「空 = 据え置き」の no-op になる。
         val state = buildResolverState(readingInput, prefixEnd, prefixContext)
         val request = ResolutionRequest(
@@ -237,7 +273,7 @@ class RomaFlowEngine internal constructor(
             graphRevision = 0,
             candidatePackDigest = 0,
         )
-        val proposal = rerankResolver.propose(request)
+        val proposal = activeResolver.propose(request)
 
         return when (proposal) {
             is ResolutionProposal.ProposeJointCorrection -> proposal.preferredSurface.orEmpty()
