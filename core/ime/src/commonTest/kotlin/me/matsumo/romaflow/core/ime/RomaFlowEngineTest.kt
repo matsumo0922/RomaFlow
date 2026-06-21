@@ -165,6 +165,7 @@ class RomaFlowEngineTest {
             aligner = FakeAligner(),
             readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
+            rerankMode = RerankMode.Flat,
         )
         engine.inputRomaji("nihongo")
 
@@ -847,6 +848,7 @@ class RomaFlowEngineTest {
             aligner = FakeAligner(),
             readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
+            rerankMode = RerankMode.Flat,
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -912,6 +914,7 @@ class RomaFlowEngineTest {
             aligner = FakeAligner(),
             readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
+            rerankMode = RerankMode.Flat,
         )
         engine.inputRomaji("watashitenki")
         engine.convertAndApply()
@@ -981,6 +984,7 @@ class RomaFlowEngineTest {
             aligner = FakeAligner(),
             readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
+            rerankMode = RerankMode.Flat,
         )
         engine.inputRomaji("kaki")
 
@@ -1022,6 +1026,7 @@ class RomaFlowEngineTest {
             aligner = FakeAligner(),
             readingLexiconFactory = { buildReadingLexiconWithFallback(FakeReadingLexicon) },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
+            rerankMode = RerankMode.Flat,
         )
         engine.inputRomaji("watashitenki")
         engine.applyConversion(engine.convert())
@@ -1213,6 +1218,12 @@ private class RecordingConversionProvider : ConversionProvider {
         lastRerankRequest = request
 
         return -1
+    }
+
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult {
+        return me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
     }
 }
 

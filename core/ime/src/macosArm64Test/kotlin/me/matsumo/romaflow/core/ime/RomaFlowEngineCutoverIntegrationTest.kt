@@ -175,6 +175,10 @@ private class FixedConversionProvider(private val fixedResult: String) : Convers
     override suspend fun convert(request: ConversionRequest): String = fixedResult
     override suspend fun candidates(request: WordCandidateRequest): String = ""
     override suspend fun rerank(request: RerankRequest): Int = -1
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
 }
 
 /**
@@ -187,6 +191,10 @@ private object AlwaysFailRerankProvider : ConversionProvider {
     override suspend fun convert(request: ConversionRequest): String = ""
     override suspend fun candidates(request: WordCandidateRequest): String = ""
     override suspend fun rerank(request: RerankRequest): Int = -1
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
 }
 
 /** 「天気」を 1 token で分割する [Segmenter]。 */

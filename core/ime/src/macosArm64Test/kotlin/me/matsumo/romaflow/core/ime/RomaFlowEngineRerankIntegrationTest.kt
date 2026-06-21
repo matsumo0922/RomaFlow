@@ -158,6 +158,10 @@ private class AlwaysFailRerankStub : ConversionProvider {
     override suspend fun convert(request: ConversionRequest): String = ""
     override suspend fun candidates(request: WordCandidateRequest): String = ""
     override suspend fun rerank(request: RerankRequest): Int = -1
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
 }
 
 /**
