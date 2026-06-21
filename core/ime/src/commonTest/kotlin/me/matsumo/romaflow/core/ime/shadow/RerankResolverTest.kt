@@ -385,7 +385,7 @@ private class AlwaysFailRerankProvider : me.matsumo.romaflow.core.ime.Conversion
     override suspend fun rerankFactorized(
         request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
-        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
 }
 
 /**
@@ -402,7 +402,7 @@ private class OutOfRangeRerankProvider(
     override suspend fun rerankFactorized(
         request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
-        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
 }
 
 /**
@@ -419,7 +419,7 @@ private class FixedIndexRerankProvider(
     override suspend fun rerankFactorized(
         request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
-        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
 }
 
 /**
@@ -517,7 +517,7 @@ private class RecordingRerankProvider : me.matsumo.romaflow.core.ime.ConversionP
     override suspend fun rerankFactorized(
         request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
-        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
 }
 
 /** [literalKeepBaselineAlwaysPresentInCandidates] で使う N-best 件数。literal が cap 外になる小さい値に設定。 */

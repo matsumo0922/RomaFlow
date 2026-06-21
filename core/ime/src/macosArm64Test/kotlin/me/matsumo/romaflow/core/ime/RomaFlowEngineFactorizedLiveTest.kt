@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  * factorized rerank の end-to-end live テスト（実 OpenAI + 本番経路 [RomaFlowEngine]）。
  *
  * 本番 constructor [RomaFlowEngine]（既定 AI provider・momiji segmenter・DP aligner・IPADIC・
- * [RerankMode.Factorized]）を使い、romaji 入力 → [RomaFlowEngine.convert] → [RomaFlowEngine.applyConversion]
+ * [RerankMode.FactorizedSurface]）を使い、romaji 入力 → [RomaFlowEngine.convert] → [RomaFlowEngine.applyConversion]
  * → segment 表層連結、という IME 実フローをそのまま回して期待表層と比較する。
  *
  * [LIVE_CASES] に「romaji 入力 → 期待表層」を追加すれば任意ケースを検証できる。
@@ -98,9 +98,17 @@ class RomaFlowEngineFactorizedLiveTest {
     }
 
     private companion object {
-        /** factorized live 検証ケース。任意の「romaji 入力 → 期待表層」をここに追加する。 */
+        /**
+         * factorized live 検証ケース。任意の「romaji 入力 → 期待表層」をここに追加する。
+         *
+         * PR-A 追加ケース:
+         * - いかのしりょうによれば: open surface で pack 外の「以下」が採用されること。
+         * - かんじかなまじりぶん: LLM が「漢字/かな/交じり/文」の適切な表記を提案すること。
+         */
         val LIVE_CASES = listOf(
             LiveCase(romaji = "benkyoushiteseikawoageta", expected = "勉強して成果を上げた"),
+            LiveCase(romaji = "ikanoshiryouniyoreba", expected = "以下の資料によれば"),
+            LiveCase(romaji = "kanjikanamajiribun", expected = "漢字かな交じり文"),
         )
     }
 }

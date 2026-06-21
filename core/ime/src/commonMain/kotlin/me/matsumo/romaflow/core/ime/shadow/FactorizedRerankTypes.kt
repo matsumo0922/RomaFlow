@@ -67,14 +67,15 @@ internal data class FactorizedRerankRequest(
 )
 
 /**
- * LLM の返答（region ごとの選択）。
+ * LLM の region ごとの表層提案（closed-set index ではなく自由表層）。
  *
- * [choices] が空の場合は LLM 失敗・parse 失敗・API key 未設定を示す。
- * region 欠落・option_id 範囲外の region は未選択扱いとし、baseline に fallback する。
+ * [decisions] は regionId → 提案 surface。pack（hint）の option に限定されず、
+ * 格子内の任意の表層を提案できる。空の場合は LLM 失敗・parse 失敗・API key 未設定を示す。
+ * resolver が各 surface を full lattice で検証し、合法なら採用・非合法は baseline へ fallback する。
  *
- * @param choices region ID → option ID の対応表。
+ * @param decisions regionId → 提案 surface（parse 失敗時は空）。
  */
 internal data class FactorizedRerankResult(
-    /** region ID → option ID の対応表（parse 失敗時は空）。 */
-    val choices: Map<String, String>,
+    /** regionId → 提案 surface（parse 失敗時は空）。 */
+    val decisions: Map<String, String>,
 )

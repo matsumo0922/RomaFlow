@@ -25,12 +25,12 @@ import me.matsumo.romaflow.core.morphology.defaultConnectionCostProvider
 /**
  * rerank の動作モード。
  *
- * - [Factorized]: atomic factorized rerank（既定）。曖昧箇所を region に因数分解して各 region を LLM に選ばせる。
+ * - [FactorizedSurface]: open surface proposal + 格子検証（既定）。LLM が表層を提案し resolver が full lattice 検証する。
  * - [Flat]: 全文 N-best から1つ選ぶ flat rerank（比較・回帰用に残す）。
  */
 internal enum class RerankMode {
-    /** atomic factorized rerank（既定）。 */
-    Factorized,
+    /** open surface proposal + 格子検証（既定）。hint pack 外の表層も格子内なら採用できる。 */
+    FactorizedSurface,
 
     /** 全文 N-best rerank（比較・回帰用）。 */
     Flat,
@@ -42,9 +42,9 @@ internal enum class RerankMode {
  * IMKInputController インスタンスごとに1つ生成され、[ConversionDraft]（romaji 入力層・変換済 segment・
  * 単語選択）を持つ。入力は 2 レイヤに分かれ、romaji→kana は末尾の pendingRomaji にだけ増分適用し、
  * 確定したかなは readingInput に frozen として積む。kana→kanji は Tab 起動で readingInput 全体を
- * 既定 resolver（[FactorizedRerankResolver]、[RerankMode.Factorized]）に投入し、曖昧箇所を region へ
- * 因数分解して LLM に region ごとの候補を選ばせ、その選択を §6 検証（[ProposalApplier]）を経由して
- * verified path → projected segments へ変換する（A-rerank / factorized）。[RerankMode.Flat] の
+ * 既定 resolver（[FactorizedRerankResolver]、[RerankMode.FactorizedSurface]）に投入し、曖昧箇所を region へ
+ * 因数分解して LLM に region ごとの表層を提案させ、full lattice 検証後に §6 applier（[ProposalApplier]）を経由して
+ * verified path → projected segments へ変換する（A-rerank / open surface）。[RerankMode.Flat] の
  * [RerankResolver]（全文 N-best index 選択）と [LegacyFullTextResolver] は比較・回帰用に温存。
  * 変換結果の各 segment は [ReadingAligner] で readingInput 上の [TextRange] に対応付け、
  * per-segment の revert・削除を range 単位で扱う。
@@ -77,8 +77,8 @@ class RomaFlowEngine internal constructor(
     private val homophoneDictionary: HomophoneDictionary = EmptyHomophoneDictionary,
     private val readingLexiconFactory: () -> ReadingLexicon = ::IpadicReadingLexicon,
     private val connectionCostProviderFactory: () -> ConnectionCostProvider = ::defaultConnectionCostProvider,
-    /** rerank の動作モード。既定は [RerankMode.Factorized]（factorized rerank）。 */
-    private val rerankMode: RerankMode = RerankMode.Factorized,
+    /** rerank の動作モード。既定は [RerankMode.FactorizedSurface]（open surface proposal + 格子検証）。 */
+    private val rerankMode: RerankMode = RerankMode.FactorizedSurface,
 ) {
 
     private val converter = RomajiKanaConverter()
@@ -153,10 +153,10 @@ class RomaFlowEngine internal constructor(
         )
     }
 
-    // feature flag で flat / factorized を切替。既定は factorized（§5）。
+    // feature flag で flat / factorized surface を切替。既定は FactorizedSurface（open surface + 格子検証）。
     private val activeResolver: ConversionResolver by lazy {
         when (rerankMode) {
-            RerankMode.Factorized -> factorizedRerankResolver
+            RerankMode.FactorizedSurface -> factorizedRerankResolver
             RerankMode.Flat -> flatRerankResolver
         }
     }
