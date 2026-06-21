@@ -67,6 +67,9 @@ class A4ResolverComparisonTest {
         val fakeProvider = FakeConversionProvider()
         val applier = ProposalApplier(lexicon = lexicon, costProvider = costProvider)
 
+        // FakeDeterministicResolver + applier の §6 検証フローの smoke test 用に、Fake 変換表で必ず正解が
+        // 出る既知の少数ケースだけを使う（精度下限 assert 用）。戦略×カテゴリの本比較は
+        // runFakeCategoryComparison が EvaluationCorpus.all で行うため、こことは役割が異なる。
         val corpus = listOf(
             "てんき" to "天気",
             "わたし" to "私",
@@ -498,6 +501,8 @@ private class RecordingConversionProvider(
     private val costProvider: ConnectionCostProvider,
 ) : ConversionProvider {
 
+    // カウンタは逐次実行（runBlocking の単一スレッドループ）前提でスレッドセーフではない。
+    // ハーネスは1戦略ずつ corpus を順に流すため同時アクセスは発生しない。
     private var totalProposalCount = 0
     private var invalidProposalCount = 0
 

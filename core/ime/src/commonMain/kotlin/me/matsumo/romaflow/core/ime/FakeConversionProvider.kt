@@ -13,13 +13,7 @@ import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult
 internal class FakeConversionProvider : ConversionProvider {
 
     override suspend fun convert(request: ConversionRequest): String {
-        var converted = request.readingInput
-
-        for ((reading, kanji) in CONVERSION_TABLE) {
-            converted = converted.replace(reading, kanji)
-        }
-
-        return converted
+        return buildConvertedSurface(request.readingInput)
     }
 
     override suspend fun candidates(request: WordCandidateRequest): String {
