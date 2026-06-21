@@ -533,13 +533,16 @@ private class RecordingConversionProvider(
     }
 
     private fun recordFullTailProposal(reading: String, proposed: String) {
-        if (proposed.isBlank()) return
+        // resolver は採用前に trim するため、invalid 判定も trim 後で行い実挙動と一致させる。
+        val trimmedSurface = proposed.trim()
+
+        if (trimmedSurface.isBlank()) return
 
         totalProposalCount++
 
         val isValid = ReadingLatticeDecoder.findMinCostPathForSurface(
             reading = reading,
-            surface = proposed,
+            surface = trimmedSurface,
             lexicon = lexicon,
             costProvider = costProvider,
         ) != null
@@ -552,13 +555,16 @@ private class RecordingConversionProvider(
         result: FactorizedRerankResult,
     ) {
         for (region in request.regions) {
-            val surface = result.decisions[region.id] ?: continue
+            // resolver は採用前に trim するため、invalid 判定も trim 後で行い実挙動と一致させる。
+            val trimmedSurface = result.decisions[region.id]?.trim() ?: continue
+
+            if (trimmedSurface.isBlank()) continue
 
             totalProposalCount++
 
             val isValid = ReadingLatticeDecoder.findMinCostPathForSurface(
                 reading = region.reading,
-                surface = surface,
+                surface = trimmedSurface,
                 lexicon = lexicon,
                 costProvider = costProvider,
             ) != null

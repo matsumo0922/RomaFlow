@@ -3,6 +3,7 @@ package me.matsumo.romaflow.core.ime.shadow
 import me.matsumo.romaflow.core.ime.ConversionProvider
 import me.matsumo.romaflow.core.ime.SourceSpan
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
+import me.matsumo.romaflow.core.morphology.LexemeEntry
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
 
@@ -105,7 +106,7 @@ internal class FullTailSurfaceResolver(
         return if (isValidPath) proposed else baselineSurface
     }
 
-    private fun buildSurfaceFromPath(path: List<me.matsumo.romaflow.core.morphology.LexemeEntry>): String {
+    private fun buildSurfaceFromPath(path: List<LexemeEntry>): String {
         val builder = StringBuilder()
 
         for (lexeme in path) {
