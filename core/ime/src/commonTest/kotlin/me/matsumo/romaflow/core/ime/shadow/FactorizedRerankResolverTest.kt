@@ -244,6 +244,34 @@ class FactorizedRerankResolverTest {
     }
 
     /**
+     * decisions の surface に前後空白・改行が混入しても、trim した上で格子検証・採用されることを確認する。
+     *
+     * モデル生成の自由表層には `"相\n"` のような付随空白が混じり得る。raw のまま検証すると格子と一致せず
+     * 合法な提案まで baseline に落ちるため、検証前に trim する（trim 後の "相" が preferredSurface になる）。
+     */
+    @Test
+    fun whitespaceWrappedSurfaceIsTrimmedThenAdopted() {
+        runBlocking {
+            val lexicon = buildReadingLexiconWithFallback(AmbiguousSpanWithExtraLexicon)
+            val fixedDecisionsProvider = FixedDecisionsProvider(mapOf("r0" to " 相\n"))
+            val resolver = FactorizedRerankResolver(
+                conversionProvider = fixedDecisionsProvider,
+                lexicon = lexicon,
+                costProvider = ZeroConnectionCostProvider,
+            )
+
+            val proposal = resolver.propose(buildRequest(buildStateWithReading("あい")))
+
+            val jointProposal = assertIs<ResolutionProposal.ProposeJointCorrection>(proposal)
+            assertEquals(
+                "相",
+                jointProposal.preferredSurface,
+                "前後空白付きの ' 相\\n' は trim して '相' が採用されること（実際: '${jointProposal.preferredSurface}'）",
+            )
+        }
+    }
+
+    /**
      * decisions で格子外の surface を提案した場合、baseline に fallback することを確認する。
      *
      * [AmbiguousSpanLexicon] の "あい" に対して、格子にない "存在しない漢字" を decisions で返す。

@@ -401,18 +401,24 @@ internal class FactorizedRerankResolver(
      * region の提案 surface が、その region の reading span の合法な実現なら surface を返す。さもなくば null。
      * 検証は [ReadingLatticeDecoder.findMinCostPathForSurface] の非 null 性で行う
      * （reading 長不一致・格子外は null）。
+     *
+     * open-surface では surface は option ID ではなくモデル生成の自由文字列のため、前後の空白・改行が
+     * 混入し得る。raw のまま検証すると格子と一致せず合法な提案まで baseline へ落ちるので、検証・採用の前に
+     * trim する（採用する surface も trim 後の値）。
      */
     private fun acceptedRegionSurfaceOrNull(region: DecisionRegion, proposed: String): String? {
-        if (proposed.isBlank()) return null
+        val trimmedSurface = proposed.trim()
+
+        if (trimmedSurface.isBlank()) return null
 
         val found = ReadingLatticeDecoder.findMinCostPathForSurface(
             reading = region.reading,
-            surface = proposed,
+            surface = trimmedSurface,
             lexicon = lexicon,
             costProvider = costProvider,
         )
 
-        return if (found != null) proposed else null
+        return if (found != null) trimmedSurface else null
     }
 
     /**
