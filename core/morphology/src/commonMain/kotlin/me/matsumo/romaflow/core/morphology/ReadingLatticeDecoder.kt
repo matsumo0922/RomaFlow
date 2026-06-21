@@ -1,6 +1,23 @@
 package me.matsumo.romaflow.core.morphology
 
 /**
+ * 格子上の 1 アーク（lexeme が覆う span）を一意に識別するキー。
+ *
+ * [startOffset] と [endOffset] は tail reading（ひらがな）の mora 座標（exclusive end）。
+ * [surface] は対応する lexeme の表層形。
+ * 同一 surface が複数の [ReadingLatticeDecoder] 内部 node を通じて格子に現れた場合、
+ * [ReadingLatticeDecoder.arcMarginalCosts] は最小コストを採用する。
+ */
+data class ArcKey(
+    /** アーク開始 mora offset（inclusive）。 */
+    val startOffset: Int,
+    /** アーク終了 mora offset（exclusive）。 */
+    val endOffset: Int,
+    /** 表層形。 */
+    val surface: String,
+)
+
+/**
  * 読み（ひらがな）から lexical lattice を構築し、Viterbi アルゴリズムで最小コスト経路を求める。
  *
  * [ReadingLexicon] と [ConnectionCostProvider] を受け取り、reading 座標の lexical lattice を
@@ -24,22 +41,6 @@ package me.matsumo.romaflow.core.morphology
  * EOS 連接コストは suffix cost に含め、complete state の f 値がそのまま総コストになる。
  * 二重加算しない（既存の [viterbi] / EOS regression テストを壊さない）。
  */
-/**
- * 格子上の 1 アーク（lexeme が覆う span）を一意に識別するキー。
- *
- * [startOffset] と [endOffset] は tail reading（ひらがな）の mora 座標（exclusive end）。
- * [surface] は対応する lexeme の表層形。
- * 同一 surface が複数の [LatticeNode] を通じて格子に現れた場合、[arcMarginalCosts] は最小コストを採用する。
- */
-data class ArcKey(
-    /** アーク開始 mora offset（inclusive）。 */
-    val startOffset: Int,
-    /** アーク終了 mora offset（exclusive）。 */
-    val endOffset: Int,
-    /** 表層形。 */
-    val surface: String,
-)
-
 object ReadingLatticeDecoder {
 
     /** BOS/EOS の連接 ID。momiji CostManager の実装に倣い 0 を使う。 */
