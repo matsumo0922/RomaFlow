@@ -9,6 +9,8 @@ package me.matsumo.romaflow.core.ime
  * - [BOUNDARY_CHANGE]: 文節境界の変更を伴う変換。境界変更被覆率の計測対象。
  * - [PROPER_NOUN]: 固有名詞・OOV が混在する読み。OOV/literal fallback 率の計測対象。
  * - [ASCII_DIGIT_SYMBOL]: ASCII・数字・記号が混在する読み。literal fallback 率の計測対象。
+ * - [HOMOPHONE_HARD]: closed-set index では正解が pack 外に落ちる等、文脈依存が特に強い同音異義語。
+ *   open-surface 提案（PR-A/B）の回帰対象として使う。gold は IPADIC で到達可能なものに限る。
  */
 enum class CorpusCategory {
 
@@ -26,6 +28,15 @@ enum class CorpusCategory {
 
     /** ASCII・数字・記号が混在する読み。literal fallback 率の計測対象。 */
     ASCII_DIGIT_SYMBOL,
+
+    /**
+     * closed-set index では正解が候補 pack 外に落ちる等、文脈依存が特に強い同音異義語。
+     *
+     * PR-A/B の open-surface 提案の回帰対象。
+     * gold はすべて IPADIC で [ReadingLatticeDecoder.findMinCostPathForSurface] が非 null（到達可能）
+     * なものに限る。到達不能な gold を含めると評価が不公平になるため、サニティテストで検証する。
+     */
+    HOMOPHONE_HARD,
 }
 
 /**
@@ -295,6 +306,66 @@ object EvaluationCorpus {
         CorpusEntry(reading = "No.1", expectedSurface = "No.1", category = CorpusCategory.ASCII_DIGIT_SYMBOL),
     )
 
-    /** 全カテゴリを結合した corpus エントリ一覧。 */
-    val all: List<CorpusEntry> = normal + homophone + boundaryChange + properNoun + asciiDigitSymbol
+    /**
+     * HOMOPHONE_HARD カテゴリ corpus（closed-set index では pack 外に正解が落ちる同音異義語）。
+     *
+     * open-surface 提案（PR-A/B）の回帰対象。
+     * gold はすべて IPADIC で [me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder.findMinCostPathForSurface]
+     * が非 null（到達可能）なものに限る。これをサニティテスト（[HomophoneHardCorpusSanityTest]）で保証する。
+     *
+     * ## エントリ選定根拠
+     * - べんきょうしてせいかをあげた: PR #30 で達成済みの回帰維持ケース
+     * - かんじかなまじりぶん: 換字/漢字 の pack-out 問題（PR-A の主要動機）
+     * - いかのしりょうによれば: 以下 が raw wcost top-6 外に落ちる構造的問題（PR-A の主要動機）
+     * - いかのとおり: 同上（以下 の pack-out パターン追加検証）
+     * - このぶんをよむ: 文/分 の文脈依存変換
+     * - しりょうをよむ: 資料 の一般文脈ケース
+     * - けんきゅうせいかをほうこくする: 成果 が文中に現れる場合の複合ケース
+     * - いかにしめす: 以下 を含む別文脈
+     */
+    val homophoneHard: List<CorpusEntry> = listOf(
+        CorpusEntry(
+            reading = "べんきょうしてせいかをあげた",
+            expectedSurface = "勉強して成果を上げた",
+            category = CorpusCategory.HOMOPHONE_HARD,
+        ),
+        CorpusEntry(
+            reading = "かんじかなまじりぶん",
+            expectedSurface = "漢字かな交じり文",
+            category = CorpusCategory.HOMOPHONE_HARD,
+        ),
+        CorpusEntry(
+            reading = "いかのしりょうによれば",
+            expectedSurface = "以下の資料によれば",
+            category = CorpusCategory.HOMOPHONE_HARD,
+        ),
+        CorpusEntry(
+            reading = "いかのとおり",
+            expectedSurface = "以下のとおり",
+            category = CorpusCategory.HOMOPHONE_HARD,
+        ),
+        CorpusEntry(
+            reading = "このぶんをよむ",
+            expectedSurface = "この文を読む",
+            category = CorpusCategory.HOMOPHONE_HARD,
+        ),
+        CorpusEntry(
+            reading = "しりょうをよむ",
+            expectedSurface = "資料を読む",
+            category = CorpusCategory.HOMOPHONE_HARD,
+        ),
+        CorpusEntry(
+            reading = "けんきゅうせいかをほうこくする",
+            expectedSurface = "研究成果を報告する",
+            category = CorpusCategory.HOMOPHONE_HARD,
+        ),
+        CorpusEntry(
+            reading = "いかにしめす",
+            expectedSurface = "以下に示す",
+            category = CorpusCategory.HOMOPHONE_HARD,
+        ),
+    )
+
+    /** 全カテゴリを結合した corpus エントリ一覧（HOMOPHONE_HARD を含む）。 */
+    val all: List<CorpusEntry> = normal + homophone + boundaryChange + properNoun + asciiDigitSymbol + homophoneHard
 }

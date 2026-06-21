@@ -119,6 +119,25 @@ internal class OpenAiConversionProvider(
         return rerankIndex
     }
 
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String {
+        if (reading.isBlank() || config.apiKey.isBlank()) {
+            return ""
+        }
+
+        val result = runCatching { requestConversion(reading, prefixContext) }
+        val converted = result.getOrNull()
+
+        if (converted == null) {
+            Napier.w("OpenAI proposeFullTailSurface failed", result.exceptionOrNull())
+
+            return ""
+        }
+
+        // convert() と同じく echo された prefix を除去する。reconversion prompt は prefix+tail を返し得るが、
+        // resolver は tailReading に対して検証するため、prefix が残ると検証に落ちて baseline へ倒れる。
+        return stripEchoedPrefix(converted, prefixContext).trim()
+    }
+
     override suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult {
         val regions = request.regions
 

@@ -185,4 +185,6 @@ private class RecordingRegionPackProvider : ConversionProvider {
 
         return FactorizedRerankResult(decisions = emptyMap())
     }
+
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }

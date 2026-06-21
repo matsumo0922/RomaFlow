@@ -1225,6 +1225,8 @@ private class RecordingConversionProvider : ConversionProvider {
     ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult {
         return me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(decisions = emptyMap())
     }
+
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }
 
 /** 既知の変換結果を読み付き token 列へ分割し、未登録の入力は 1 文字 1 token にフォールバックする segmenter。 */

@@ -222,4 +222,5 @@ private class AlwaysEmptyDecisionProvider : ConversionProvider {
     override suspend fun rerank(request: RerankRequest): Int = -1
     override suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult =
         FactorizedRerankResult(decisions = emptyMap())
+    override suspend fun proposeFullTailSurface(reading: String, prefixContext: String): String = ""
 }
