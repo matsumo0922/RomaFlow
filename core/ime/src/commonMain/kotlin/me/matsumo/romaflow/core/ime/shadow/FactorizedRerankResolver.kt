@@ -17,13 +17,18 @@ import me.matsumo.romaflow.core.morphology.ReadingLexicon
  * 4. region が 0 個なら LLM を呼ばずに baseline surface を [ResolutionProposal.ProposeJointCorrection] で返す。
  * 5. region がある場合は template + regions を [FactorizedRerankRequest] に詰めて
  *    [ConversionProvider.rerankFactorized] を呼ぶ。
- * 6. choices（region ID → option ID）を受け取り、各 region の選択 option の lexemePath を baseline に差し込む。
- *    未選択 region は baseline の lexeme を使う。
- * 7. 完全 lexeme path の surface を連結して [ResolutionProposal.ProposeJointCorrection.preferredSurface] で返す。
+ * 6. choices（region ID → option ID）を受け取り、各 region で選択 option の surface を、確定部では baseline
+ *    lexeme の surface を採用する。未選択 region・option_id 範囲外も baseline lexeme の surface を使う。
+ * 7. それらを連結した「表層文字列」を [ResolutionProposal.ProposeJointCorrection.preferredSurface] で返す。
  *
- * ## surface-carry 不変条件
- * `convert()` が String を返し `applyConversion()` / [ProposalApplier] が再検証する契約は変えない。
- * [applyConversion] / `buildResolverState` / `buildVerifiedOrFallbackTailSegments` は無改造。
+ * ## surface-carry 不変条件（path identity は保持しない）
+ * 本 resolver が返すのは選択結果を反映した **surface**（表層文字列）であり、`applyConversion()` 側の
+ * [ProposalApplier] がその surface から格子上の合法 path を再探索して採用する。`convert()` が String を返し
+ * applier が再検証する契約は変えない（[applyConversion] / `buildResolverState` /
+ * `buildVerifiedOrFallbackTailSegments` は無改造）。
+ * したがって [RegionOption.lexemePath] はここでは surface 抽出にのみ使い、その path identity（連接 ID / POS /
+ * lexeme 同一性）は最終状態へ pin しない。選択 subpath を pin した上での未確定区間の constrained Viterbi
+ * 再補完は本実装では out of scope（#23 後続）。
  *
  * ## literal/KEEP baseline
  * OOV / literal の span は baseline lexeme の surface がそのまま候補に含まれる（単一候補 → 確定部扱い）。
@@ -310,10 +315,10 @@ internal class FactorizedRerankResolver(
     }
 
     /**
-     * choices（region ID → option ID）を使って baseline に選択 option の lexemePath を差し込み、
-     * 完全 lexeme path の surface を連結して返す。
+     * choices（region ID → option ID）を使い、選択 option の surface（確定部は baseline lexeme の surface）を
+     * 連結した表層文字列を返す。返すのは surface のみで path identity は持たない（applier が後段で再探索する）。
      *
-     * 未選択 region・option_id 範囲外 → baseline lexeme を使う。
+     * 未選択 region・option_id 範囲外 → baseline lexeme の surface を使う。
      */
     private fun assembleSurface(
         baselineSpans: List<BaselineSpan>,

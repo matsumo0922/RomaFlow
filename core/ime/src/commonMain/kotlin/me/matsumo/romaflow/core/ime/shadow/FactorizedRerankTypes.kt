@@ -30,11 +30,13 @@ internal data class DecisionRegion(
 /**
  * region の 1 候補。
  *
- * LLM がこの候補を選択した場合、[lexemePath] を baseline に差し込んで完全経路を組み立てる。
+ * LLM がこの候補を選択した場合、resolver は [lexemePath] から **surface** を取り出して baseline の当該 span に
+ * 差し込み、連結した表層文字列を surface-carry で返す。[lexemePath] の path identity（連接 ID / POS /
+ * lexeme 同一性）は最終状態へ pin されず、`ProposalApplier` が surface から格子上の path を再探索する。
  *
  * @param id 候補の識別子。"r0o0"、"r0o1"、... の形式で付与する。
  * @param surface この候補の表層形。
- * @param lexemePath この span を覆う subpath（差し込み用）。通常は単一 LexemeEntry。
+ * @param lexemePath この span を覆う subpath。通常は単一 LexemeEntry。本実装では surface 抽出にのみ使う。
  */
 internal data class RegionOption(
     /** 候補の識別子（例: "r0o0"、"r0o1"）。 */

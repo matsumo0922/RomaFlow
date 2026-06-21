@@ -23,32 +23,6 @@ import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
 import me.matsumo.romaflow.core.morphology.defaultConnectionCostProvider
 
 /**
- * RomaFlow IME core の変換 draft を保持するエンジン。
- *
- * IMKInputController インスタンスごとに1つ生成され、[ConversionDraft]（romaji 入力層・変換済 segment・
- * 単語選択）を持つ。入力は 2 レイヤに分かれ、romaji→kana は末尾の pendingRomaji にだけ増分適用し、
- * 確定したかなは readingInput に frozen として積む。kana→kanji は Tab 起動で readingInput 全体を
- * 既定 resolver（[RerankResolver]）に投入し、格子 N-best から LLM に index で選ばせた候補を
- * §6 検証（[ProposalApplier]）を経由して verified path → projected segments へ変換する（A-rerank）。
- * [LegacyFullTextResolver] は A-4 比較用に温存。変換結果の各 segment は [ReadingAligner] で
- * readingInput 上の [TextRange] に対応付け、per-segment の revert・削除を range 単位で扱う。
- * rerank 失敗・preferredSurface が格子外の場合は辞書 Viterbi 1位（rank-0）へ fallback する
- * （[buildViterbiFallbackTailSegments]）。OOV/自由漢字は compositeLexicon の literal arc で
- * verified literal path となるため、legacy [buildTailSegments] は graph が空の最終手段としてのみ残す。
- * 公開 API は Swift Export に合わせ String / Int / Boolean / suspend のみを受け渡しする（List は出さない）。
- *
- * ## A-5 cutover: lexicon / costProvider 注入
- * テスト注入用に internal constructor で [readingLexiconFactory] と [connectionCostProviderFactory] を受け取る。
- * public constructor は本番向けの [IpadicReadingLexicon] と [defaultConnectionCostProvider] を使う。
- * matrix ロード（重い）は初回 [convert] まで遅延するため、engine 構築時のレイテンシを避ける。
- * factory はラムダとして渡され、[readingLexicon] / [connectionCostProvider] の by lazy フィールドで
- * 初回 convert() 時に評価される。これにより engine 構築時点ではいかなるロードも走らない。
- *
- * ## スコープ外（follow-up）
- * inputRomaji / deleteBackward / candidates / lock / marked-text / Swift adapter の shadow 化、
- * atom 座標化・lock 跨ぎ厳密化・preview surface、OneShotJointPatch 本実装は A-5 以降の follow-up。
- */
-/**
  * rerank の動作モード。
  *
  * - [Factorized]: atomic factorized rerank（既定）。曖昧箇所を region に因数分解して各 region を LLM に選ばせる。
@@ -62,6 +36,40 @@ internal enum class RerankMode {
     Flat,
 }
 
+/**
+ * RomaFlow IME core の変換 draft を保持するエンジン。
+ *
+ * IMKInputController インスタンスごとに1つ生成され、[ConversionDraft]（romaji 入力層・変換済 segment・
+ * 単語選択）を持つ。入力は 2 レイヤに分かれ、romaji→kana は末尾の pendingRomaji にだけ増分適用し、
+ * 確定したかなは readingInput に frozen として積む。kana→kanji は Tab 起動で readingInput 全体を
+ * 既定 resolver（[FactorizedRerankResolver]、[RerankMode.Factorized]）に投入し、曖昧箇所を region へ
+ * 因数分解して LLM に region ごとの候補を選ばせ、その選択を §6 検証（[ProposalApplier]）を経由して
+ * verified path → projected segments へ変換する（A-rerank / factorized）。[RerankMode.Flat] の
+ * [RerankResolver]（全文 N-best index 選択）と [LegacyFullTextResolver] は比較・回帰用に温存。
+ * 変換結果の各 segment は [ReadingAligner] で readingInput 上の [TextRange] に対応付け、
+ * per-segment の revert・削除を range 単位で扱う。
+ * rerank 失敗・preferredSurface が格子外の場合は辞書 Viterbi 1位（rank-0）へ fallback する
+ * （[buildViterbiFallbackTailSegments]）。OOV/自由漢字は compositeLexicon の literal arc で
+ * verified literal path となるため、legacy [buildTailSegments] は graph が空の最終手段としてのみ残す。
+ * 公開 API は Swift Export に合わせ String / Int / Boolean / suspend のみを受け渡しする（List は出さない）。
+ *
+ * ## surface-carry（factorized の path identity は保持しない）
+ * resolver は LLM が選んだ region surface を baseline に差し込んだ「表層文字列」を [convert] の戻り値として返し、
+ * [applyConversion] 側の [ProposalApplier] がその surface から格子上の合法 path を再探索して採用する。
+ * したがって LLM が選んだ subpath の path identity（連接 ID / POS / lexeme 同一性）は最終状態へ pin されない。
+ * 選択 subpath を pin した上での未確定区間の constrained Viterbi 再補完は本実装では out of scope（#23 後続）。
+ *
+ * ## A-5 cutover: lexicon / costProvider 注入
+ * テスト注入用に internal constructor で [readingLexiconFactory] と [connectionCostProviderFactory] を受け取る。
+ * public constructor は本番向けの [IpadicReadingLexicon] と [defaultConnectionCostProvider] を使う。
+ * matrix ロード（重い）は初回 [convert] まで遅延するため、engine 構築時のレイテンシを避ける。
+ * factory はラムダとして渡され、[readingLexicon] / [connectionCostProvider] の by lazy フィールドで
+ * 初回 convert() 時に評価される。これにより engine 構築時点ではいかなるロードも走らない。
+ *
+ * ## スコープ外（follow-up）
+ * inputRomaji / deleteBackward / candidates / lock / marked-text / Swift adapter の shadow 化、
+ * atom 座標化・lock 跨ぎ厳密化・preview surface、OneShotJointPatch 本実装は A-5 以降の follow-up。
+ */
 class RomaFlowEngine internal constructor(
     private val conversionProvider: ConversionProvider,
     private val segmenter: Segmenter,
@@ -1071,8 +1079,8 @@ class RomaFlowEngine internal constructor(
      * resolver / applier へ渡す [CompositionState] を最小ブリッジとして構築する。
      *
      * [fullReading] は readingInput 全体、[prefixEnd] は locked prefix の終端（0 = lock なし）、
-     * [prefixContext] は locked prefix の surface 連結。[RerankResolver]（既定）/ [LegacyFullTextResolver]
-     * と [ProposalApplier] は `state.pinnedConstraint.pinnedSurface`（prefixContext）と
+     * [prefixContext] は locked prefix の surface 連結。[FactorizedRerankResolver]（既定）/ [RerankResolver]
+     * / [LegacyFullTextResolver] と [ProposalApplier] は `state.pinnedConstraint.pinnedSurface`（prefixContext）と
      * `lockedPrefixBoundary`（prefixEnd）のみを参照するため、synthetic な [LexemeEntry] で pinnedPath を埋める。
      * synthetic の連接 ID は不問（tail path の segment 化に pinnedPath は使わない）。
      * lock 跨ぎの厳密化は A-5 以降の follow-up（設計ドキュメント参照）。

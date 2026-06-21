@@ -596,7 +596,8 @@ private const val REQUEST_TIMEOUT_MILLIS = 15_000L
  *
  * [reasoningEffort] は gpt-5 系の推論量で、null のときは送出しない（互換エンドポイント向け）。
  * IME 変換は推論不要なので `"minimal"` を指定し、隠れ reasoning token によるレイテンシを潰す。
- * [responseFormat] は call2（候補生成）でのみ付与する Structured Outputs 指定で、null のときは送出しない。
+ * [responseFormat] は Structured Outputs（json_schema, strict）指定で、null のときは送出しない。
+ * call2（候補生成）・flat rerank（index 選択）・factorized rerank（choices 選択）で付与し、
  * call1（全文変換）は plain text のままにするため null とする。
  */
 @Serializable
