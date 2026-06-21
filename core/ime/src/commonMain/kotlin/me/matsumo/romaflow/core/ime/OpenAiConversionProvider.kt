@@ -20,9 +20,13 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.matsumo.romaflow.core.ime.shadow.DecisionRegion
+import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest
+import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult
 
 /**
  * OpenAI 互換 chat completions API でかな読みを漢字交じり文へ変換する [ConversionProvider]。
@@ -113,6 +117,177 @@ internal class OpenAiConversionProvider(
         }
 
         return rerankIndex
+    }
+
+    override suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult {
+        val regions = request.regions
+
+        if (regions.isEmpty() || config.apiKey.isBlank()) {
+            return FactorizedRerankResult(choices = emptyMap())
+        }
+
+        val result = runCatching {
+            requestFactorizedRerank(request.template, request.prefixContext, regions)
+        }
+        val factorizedResult = result.getOrElse {
+            Napier.w("OpenAI factorized rerank failed", it)
+            FactorizedRerankResult(choices = emptyMap())
+        }
+
+        return factorizedResult
+    }
+
+    private suspend fun requestFactorizedRerank(
+        template: String,
+        prefixContext: String,
+        regions: List<DecisionRegion>,
+    ): FactorizedRerankResult {
+        val userContent = buildFactorizedRerankUserContent(template, prefixContext, regions)
+        val rerankRequest = ChatCompletionRequest(
+            model = config.model,
+            messages = listOf(
+                ChatMessage(role = "system", content = FACTORIZED_RERANK_SYSTEM_PROMPT),
+                ChatMessage(role = "user", content = userContent),
+            ),
+            reasoningEffort = REASONING_EFFORT,
+            responseFormat = buildFactorizedRerankResponseFormat(),
+        )
+        val endpoint = "${config.baseUrl.trimEnd('/')}/chat/completions"
+
+        val response = httpClient.post(endpoint) {
+            header(HttpHeaders.Authorization, "Bearer ${config.apiKey}")
+            contentType(ContentType.Application.Json)
+            setBody(rerankRequest)
+        }
+        val completion = response.body<ChatCompletionResponse>()
+        val content = completion.choices.firstOrNull()?.message?.content.orEmpty()
+
+        return parseFactorizedRerankResult(content, regions)
+    }
+
+    // テンプレート + 全 region の候補を LLM に提示するユーザーコンテンツを構築する（§8 の検証済み形式）。
+    private fun buildFactorizedRerankUserContent(
+        template: String,
+        prefixContext: String,
+        regions: List<DecisionRegion>,
+    ): String {
+        val builder = StringBuilder()
+
+        if (prefixContext.isNotBlank()) {
+            builder.appendLine("前方文脈: $prefixContext")
+        }
+
+        builder.appendLine("テンプレート: $template")
+
+        for (region in regions) {
+            builder.appendLine("region ${region.id} (読み: ${region.reading}):")
+
+            for (option in region.options) {
+                builder.appendLine("    ${option.id}: ${option.surface}")
+            }
+        }
+
+        return builder.toString().trimEnd()
+    }
+
+    // Structured Outputs で {"choices":[{"region_id":"r0","option_id":"r0o0"},...]} を強制する
+    // json_schema を構築する（strict=true）。region_id / option_id は文字列のため region には依存しない。
+    private fun buildFactorizedRerankResponseFormat(): JsonObject {
+        val jsonSchema = buildJsonObject {
+            put("name", "factorized_rerank_selection")
+            put("strict", true)
+            put("schema", buildFactorizedRerankSchema())
+        }
+
+        return buildJsonObject {
+            put("type", "json_schema")
+            put("json_schema", jsonSchema)
+        }
+    }
+
+    private fun buildFactorizedRerankSchema(): JsonObject {
+        val regionIdProperty = buildJsonObject { put("type", "string") }
+        val optionIdProperty = buildJsonObject { put("type", "string") }
+        val choiceProperties = buildJsonObject {
+            put("region_id", regionIdProperty)
+            put("option_id", optionIdProperty)
+        }
+        val choiceSchema = buildJsonObject {
+            put("type", "object")
+            put("properties", choiceProperties)
+            put(
+                "required",
+                JsonArray(listOf(JsonPrimitive("region_id"), JsonPrimitive("option_id"))),
+            )
+            put("additionalProperties", false)
+        }
+        val choicesProperty = buildJsonObject {
+            put("type", "array")
+            put("items", choiceSchema)
+        }
+        val properties = buildJsonObject {
+            put("choices", choicesProperty)
+        }
+
+        return buildJsonObject {
+            put("type", "object")
+            put("properties", properties)
+            put("required", JsonArray(listOf(JsonPrimitive("choices"))))
+            put("additionalProperties", false)
+        }
+    }
+
+    // LLM の返答 JSON をパースして FactorizedRerankResult に変換する。
+    // parse 失敗・option_id 範囲外・region 欠落は当該 region を未選択（choices に含めない）扱いとする。
+    private fun parseFactorizedRerankResult(content: String, regions: List<DecisionRegion>): FactorizedRerankResult {
+        if (content.isBlank()) {
+            return FactorizedRerankResult(choices = emptyMap())
+        }
+
+        val validOptionIds = buildValidOptionIdSet(regions)
+
+        val parsedChoices = runCatching {
+            val json = Json { ignoreUnknownKeys = true }
+            val obj = json.parseToJsonElement(content).jsonObject
+            val choicesArray = obj["choices"]?.jsonArray ?: return FactorizedRerankResult(choices = emptyMap())
+
+            buildChoicesMap(choicesArray, validOptionIds)
+        }.getOrElse { return FactorizedRerankResult(choices = emptyMap()) }
+
+        return FactorizedRerankResult(choices = parsedChoices)
+    }
+
+    private fun buildValidOptionIdSet(regions: List<DecisionRegion>): Set<String> {
+        val validOptionIds = mutableSetOf<String>()
+
+        for (region in regions) {
+            for (option in region.options) {
+                validOptionIds.add(option.id)
+            }
+        }
+
+        return validOptionIds
+    }
+
+    private fun buildChoicesMap(
+        choicesArray: JsonArray,
+        validOptionIds: Set<String>,
+    ): Map<String, String> {
+        val result = mutableMapOf<String, String>()
+
+        for (element in choicesArray) {
+            val choiceObj = element.jsonObject
+            val regionId = choiceObj["region_id"]?.jsonPrimitive?.content ?: continue
+            val optionId = choiceObj["option_id"]?.jsonPrimitive?.content ?: continue
+
+            val isValidOption = optionId in validOptionIds
+
+            if (isValidOption) {
+                result[regionId] = optionId
+            }
+        }
+
+        return result
     }
 
     private suspend fun requestConversion(
@@ -372,6 +547,18 @@ internal class OpenAiConversionProvider(
                 "与えられた読み（ひらがな）に対する変換候補を、与えられた文脈に最も自然に合う順で複数挙げてください。" +
                 "同音異義語・漢字表記・ひらがな・カタカナを含めてよいですが、読みに対応しないものは含めないこと。" +
                 "出力は {\"candidates\":[...]} という JSON のみとし、説明・前置きは出力しないこと。"
+
+        /**
+         * factorized rerank（候補選択・region 分割）専用の system prompt。
+         *
+         * テンプレート全体と各 region の候補を提示し、region ごとに最も自然な option を1つずつ選ばせる。
+         * §8 の検証済みプロンプト形式をそのまま使う。
+         */
+        const val FACTORIZED_RERANK_SYSTEM_PROMPT =
+            "あなたは日本語IMEの変換候補選択エンジンです。" +
+                "テンプレート全体（前後の確定文字列）を踏まえ、各 region について最も自然な option を1つずつ選んでください。" +
+                "必ず {\"choices\":[{\"region_id\":\"r0\",\"option_id\":\"r0oN\"},...]} の JSON のみを出力し、説明・前置きは出力しないこと。" +
+                "option_id はリストにあるものだけを使うこと。"
     }
 }
 
@@ -409,7 +596,8 @@ private const val REQUEST_TIMEOUT_MILLIS = 15_000L
  *
  * [reasoningEffort] は gpt-5 系の推論量で、null のときは送出しない（互換エンドポイント向け）。
  * IME 変換は推論不要なので `"minimal"` を指定し、隠れ reasoning token によるレイテンシを潰す。
- * [responseFormat] は call2（候補生成）でのみ付与する Structured Outputs 指定で、null のときは送出しない。
+ * [responseFormat] は Structured Outputs（json_schema, strict）指定で、null のときは送出しない。
+ * call2（候補生成）・flat rerank（index 選択）・factorized rerank（choices 選択）で付与し、
  * call1（全文変換）は plain text のままにするため null とする。
  */
 @Serializable

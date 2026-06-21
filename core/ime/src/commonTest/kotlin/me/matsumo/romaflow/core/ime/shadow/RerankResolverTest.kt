@@ -382,6 +382,10 @@ private class AlwaysFailRerankProvider : me.matsumo.romaflow.core.ime.Conversion
     override suspend fun convert(request: ConversionRequest): String = ""
     override suspend fun candidates(request: WordCandidateRequest): String = ""
     override suspend fun rerank(request: RerankRequest): Int = -1
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
 }
 
 /**
@@ -395,6 +399,10 @@ private class OutOfRangeRerankProvider(
     override suspend fun convert(request: ConversionRequest): String = ""
     override suspend fun candidates(request: WordCandidateRequest): String = ""
     override suspend fun rerank(request: RerankRequest): Int = outOfRangeIndex
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
 }
 
 /**
@@ -408,6 +416,10 @@ private class FixedIndexRerankProvider(
     override suspend fun convert(request: ConversionRequest): String = ""
     override suspend fun candidates(request: WordCandidateRequest): String = ""
     override suspend fun rerank(request: RerankRequest): Int = fixedIndex
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
 }
 
 /**
@@ -501,6 +513,11 @@ private class RecordingRerankProvider : me.matsumo.romaflow.core.ime.ConversionP
         lastRequest = request
         return -1
     }
+
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult =
+        me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
 }
 
 /** [literalKeepBaselineAlwaysPresentInCandidates] で使う N-best 件数。literal が cap 外になる小さい値に設定。 */

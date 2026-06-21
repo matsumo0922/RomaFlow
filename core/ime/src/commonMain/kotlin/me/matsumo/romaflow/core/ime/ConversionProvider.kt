@@ -1,5 +1,8 @@
 package me.matsumo.romaflow.core.ime
 
+import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest
+import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult
+
 /**
  * 打った通りのかな（[ConversionRequest.readingInput]）を漢字交じりの変換結果へ、また選択文節の読みを単語候補へ
  * 変換する provider。
@@ -42,6 +45,17 @@ internal interface ConversionProvider {
      * 返却 index が候補リストの範囲外の場合も呼び出し側が -1 と同様に扱う。
      */
     suspend fun rerank(request: RerankRequest): Int
+
+    /**
+     * factorized rerank（call3-factorized）。曖昧箇所を region に因数分解し、全 region を 1 回の LLM
+     * 呼び出しで同時提示して region ごとの選択 tuple を得る（§A-factorized 設計）。
+     *
+     * 失敗した場合（API key 未設定・ネットワークエラー・タイムアウト・parse 失敗・region 空等）は
+     * [FactorizedRerankResult] の choices が空のインスタンスを返す。
+     * 呼び出し側は choices 空を「baseline（Viterbi rank-0）で代替」として扱う。
+     * option_id が region のリスト外・region 欠落の場合も呼び出し側が当該 region を未選択扱いにする。
+     */
+    suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult
 }
 
 /**

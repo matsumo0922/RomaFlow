@@ -149,13 +149,17 @@ class A4ResolverComparisonTest {
             "がっこう" to "学校",
         )
 
-        // 5 戦略のリスト（Rerank を追加）
+        // 6 戦略のリスト（Rerank・FactorizedRerank を追加）
         val strategies = listOf(
             StrategyConfig("FakeDeterministic", FakeDeterministicResolver()),
             StrategyConfig("LegacyFullText", LegacyFullTextResolver(conversionProvider)),
             StrategyConfig("OneShotJointPatch", OneShotJointPatchResolver(conversionProvider)),
             StrategyConfig("TwoStepToolLoop", TwoStepToolLoopResolver(conversionProvider)),
             StrategyConfig("Rerank", RerankResolver(conversionProvider, lexicon, costProvider)),
+            StrategyConfig(
+                "FactorizedRerank",
+                FactorizedRerankResolver(conversionProvider, lexicon, costProvider),
+            ),
         )
 
         println("=== A-4 Live Resolver Strategy Comparison ===")

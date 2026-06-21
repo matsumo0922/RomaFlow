@@ -5,6 +5,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import me.matsumo.romaflow.core.ime.shadow.CompositionGraph
 import me.matsumo.romaflow.core.ime.shadow.CompositionState
+import me.matsumo.romaflow.core.ime.shadow.ConversionResolver
+import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResolver
 import me.matsumo.romaflow.core.ime.shadow.LegacyFullTextResolver
 import me.matsumo.romaflow.core.ime.shadow.PinnedPathConstraint
 import me.matsumo.romaflow.core.ime.shadow.ProposalApplier
@@ -21,19 +23,41 @@ import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
 import me.matsumo.romaflow.core.morphology.defaultConnectionCostProvider
 
 /**
+ * rerank の動作モード。
+ *
+ * - [Factorized]: atomic factorized rerank（既定）。曖昧箇所を region に因数分解して各 region を LLM に選ばせる。
+ * - [Flat]: 全文 N-best から1つ選ぶ flat rerank（比較・回帰用に残す）。
+ */
+internal enum class RerankMode {
+    /** atomic factorized rerank（既定）。 */
+    Factorized,
+
+    /** 全文 N-best rerank（比較・回帰用）。 */
+    Flat,
+}
+
+/**
  * RomaFlow IME core の変換 draft を保持するエンジン。
  *
  * IMKInputController インスタンスごとに1つ生成され、[ConversionDraft]（romaji 入力層・変換済 segment・
  * 単語選択）を持つ。入力は 2 レイヤに分かれ、romaji→kana は末尾の pendingRomaji にだけ増分適用し、
  * 確定したかなは readingInput に frozen として積む。kana→kanji は Tab 起動で readingInput 全体を
- * 既定 resolver（[RerankResolver]）に投入し、格子 N-best から LLM に index で選ばせた候補を
- * §6 検証（[ProposalApplier]）を経由して verified path → projected segments へ変換する（A-rerank）。
- * [LegacyFullTextResolver] は A-4 比較用に温存。変換結果の各 segment は [ReadingAligner] で
- * readingInput 上の [TextRange] に対応付け、per-segment の revert・削除を range 単位で扱う。
+ * 既定 resolver（[FactorizedRerankResolver]、[RerankMode.Factorized]）に投入し、曖昧箇所を region へ
+ * 因数分解して LLM に region ごとの候補を選ばせ、その選択を §6 検証（[ProposalApplier]）を経由して
+ * verified path → projected segments へ変換する（A-rerank / factorized）。[RerankMode.Flat] の
+ * [RerankResolver]（全文 N-best index 選択）と [LegacyFullTextResolver] は比較・回帰用に温存。
+ * 変換結果の各 segment は [ReadingAligner] で readingInput 上の [TextRange] に対応付け、
+ * per-segment の revert・削除を range 単位で扱う。
  * rerank 失敗・preferredSurface が格子外の場合は辞書 Viterbi 1位（rank-0）へ fallback する
  * （[buildViterbiFallbackTailSegments]）。OOV/自由漢字は compositeLexicon の literal arc で
  * verified literal path となるため、legacy [buildTailSegments] は graph が空の最終手段としてのみ残す。
  * 公開 API は Swift Export に合わせ String / Int / Boolean / suspend のみを受け渡しする（List は出さない）。
+ *
+ * ## surface-carry（factorized の path identity は保持しない）
+ * resolver は LLM が選んだ region surface を baseline に差し込んだ「表層文字列」を [convert] の戻り値として返し、
+ * [applyConversion] 側の [ProposalApplier] がその surface から格子上の合法 path を再探索して採用する。
+ * したがって LLM が選んだ subpath の path identity（連接 ID / POS / lexeme 同一性）は最終状態へ pin されない。
+ * 選択 subpath を pin した上での未確定区間の constrained Viterbi 再補完は本実装では out of scope（#23 後続）。
  *
  * ## A-5 cutover: lexicon / costProvider 注入
  * テスト注入用に internal constructor で [readingLexiconFactory] と [connectionCostProviderFactory] を受け取る。
@@ -53,6 +77,8 @@ class RomaFlowEngine internal constructor(
     private val homophoneDictionary: HomophoneDictionary = EmptyHomophoneDictionary,
     private val readingLexiconFactory: () -> ReadingLexicon = ::IpadicReadingLexicon,
     private val connectionCostProviderFactory: () -> ConnectionCostProvider = ::defaultConnectionCostProvider,
+    /** rerank の動作モード。既定は [RerankMode.Factorized]（factorized rerank）。 */
+    private val rerankMode: RerankMode = RerankMode.Factorized,
 ) {
 
     private val converter = RomajiKanaConverter()
@@ -108,14 +134,31 @@ class RomaFlowEngine internal constructor(
     @Suppress("UnusedPrivateProperty")
     private val legacyResolver: LegacyFullTextResolver by lazy { LegacyFullTextResolver(conversionProvider) }
 
-    // 既定 resolver（A-rerank）。格子 N-best から LLM に index で選ばせ、捏造を構造的に防ぐ。
-    // legacyResolver は A4 比較用に残す。
-    private val rerankResolver: RerankResolver by lazy {
+    // flat rerank resolver（A-rerank）。格子 N-best から LLM に index で選ばせ、捏造を構造的に防ぐ。
+    // A4 比較用・flat モード切替用に残す。
+    private val flatRerankResolver: RerankResolver by lazy {
         RerankResolver(
             conversionProvider = conversionProvider,
             lexicon = compositeLexicon,
             costProvider = connectionCostProvider,
         )
+    }
+
+    // factorized rerank resolver（既定）。曖昧箇所を region に因数分解し LLM に region ごとに選ばせる。
+    private val factorizedRerankResolver: FactorizedRerankResolver by lazy {
+        FactorizedRerankResolver(
+            conversionProvider = conversionProvider,
+            lexicon = compositeLexicon,
+            costProvider = connectionCostProvider,
+        )
+    }
+
+    // feature flag で flat / factorized を切替。既定は factorized（§5）。
+    private val activeResolver: ConversionResolver by lazy {
+        when (rerankMode) {
+            RerankMode.Factorized -> factorizedRerankResolver
+            RerankMode.Flat -> flatRerankResolver
+        }
     }
 
     /**
@@ -225,10 +268,11 @@ class RomaFlowEngine internal constructor(
             return ""
         }
 
-        // A-rerank cutover: LegacyFullTextResolver から RerankResolver（既定）に差し替える。
-        // RerankResolver は graph N-best（+ literal/KEEP baseline）から LLM に index で選ばせ、捏造を構造的に防ぐ。
+        // A-rerank cutover: LegacyFullTextResolver から activeResolver（既定 factorized）に差し替える。
+        // factorizedRerankResolver は曖昧箇所を region に因数分解し LLM に region ごとに選ばせ、捏造を構造的に防ぐ。
+        // flatRerankResolver は feature flag（rerankMode=Flat）での比較・回帰用に残す。
         // legacyResolver は A4 比較用に残す（参照あり: A4ResolverComparisonTest）。
-        // rerank 失敗時: RerankResolver 内で Viterbi rank-0 surface に fallback し ProposeJointCorrection を返す。
+        // rerank 失敗時: resolver 内で Viterbi rank-0 surface に fallback し ProposeJointCorrection を返す。
         // Failure（hasValidPath=false 等）/ KeepCurrent は "" を返すことで「空 = 据え置き」の no-op になる。
         val state = buildResolverState(readingInput, prefixEnd, prefixContext)
         val request = ResolutionRequest(
@@ -237,7 +281,7 @@ class RomaFlowEngine internal constructor(
             graphRevision = 0,
             candidatePackDigest = 0,
         )
-        val proposal = rerankResolver.propose(request)
+        val proposal = activeResolver.propose(request)
 
         return when (proposal) {
             is ResolutionProposal.ProposeJointCorrection -> proposal.preferredSurface.orEmpty()
@@ -1035,8 +1079,8 @@ class RomaFlowEngine internal constructor(
      * resolver / applier へ渡す [CompositionState] を最小ブリッジとして構築する。
      *
      * [fullReading] は readingInput 全体、[prefixEnd] は locked prefix の終端（0 = lock なし）、
-     * [prefixContext] は locked prefix の surface 連結。[RerankResolver]（既定）/ [LegacyFullTextResolver]
-     * と [ProposalApplier] は `state.pinnedConstraint.pinnedSurface`（prefixContext）と
+     * [prefixContext] は locked prefix の surface 連結。[FactorizedRerankResolver]（既定）/ [RerankResolver]
+     * / [LegacyFullTextResolver] と [ProposalApplier] は `state.pinnedConstraint.pinnedSurface`（prefixContext）と
      * `lockedPrefixBoundary`（prefixEnd）のみを参照するため、synthetic な [LexemeEntry] で pinnedPath を埋める。
      * synthetic の連接 ID は不問（tail path の segment 化に pinnedPath は使わない）。
      * lock 跨ぎの厳密化は A-5 以降の follow-up（設計ドキュメント参照）。

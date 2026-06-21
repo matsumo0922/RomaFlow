@@ -1,6 +1,8 @@
 package me.matsumo.romaflow.core.ime
 
 import kotlinx.serialization.json.Json
+import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest
+import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult
 
 /**
  * 決定的な rule-based の [ConversionProvider] スタブ。
@@ -57,6 +59,37 @@ internal class FakeConversionProvider : ConversionProvider {
         return 0
     }
 
+    /**
+     * 決定的な factorized rerank スタブ。
+     *
+     * テスト・開発用。各 region の reading に対して [FACTORIZED_RERANK_TABLE] から優先 surface を引き、
+     * その surface を持つ option の id を choices として返す。
+     * 表にない読みは当該 region を未選択（choices に含めない）扱いとする。
+     * region が空の場合は空 choices を返す。
+     */
+    override suspend fun rerankFactorized(request: FactorizedRerankRequest): FactorizedRerankResult {
+        if (request.regions.isEmpty()) {
+            return FactorizedRerankResult(choices = emptyMap())
+        }
+
+        val choices = buildFactorizedChoices(request)
+
+        return FactorizedRerankResult(choices = choices)
+    }
+
+    private fun buildFactorizedChoices(request: FactorizedRerankRequest): Map<String, String> {
+        val result = mutableMapOf<String, String>()
+
+        for (region in request.regions) {
+            val preferredSurface = FACTORIZED_RERANK_TABLE[region.reading] ?: continue
+            val matchedOption = region.options.firstOrNull { it.surface == preferredSurface } ?: continue
+
+            result[region.id] = matchedOption.id
+        }
+
+        return result
+    }
+
     private companion object {
         /**
          * かなの読みと変換後の漢字の対応表。
@@ -91,6 +124,28 @@ internal class FakeConversionProvider : ConversionProvider {
          * 正しい候補を選択できることをテストで確認するために使う。
          */
         val RERANK_TABLE = mapOf(
+            "てんき" to "天気",
+            "かんじ" to "漢字",
+            "わたし" to "私",
+            "にほんご" to "日本語",
+            "とうきょう" to "東京",
+            "へんかん" to "変換",
+        )
+
+        /**
+         * factorized rerank（call3-factorized）の決定的スタブ用変換表。
+         *
+         * region の reading から優先すべき候補表層形を定義する。
+         * 統合テストの回帰ケース「べんきょうしてせいかをあげた → 勉強して成果を上げた」で
+         * せいか→成果 / あげ→上げ の選択を再現するために使う。
+         * 「あげた」は IPADIC では「あげ(動詞連用形)＋た(助動詞)」に分割されるため、
+         * 動詞 span の reading は「あげ」になる。複合語キー「あげた」も後方互換で残す。
+         */
+        val FACTORIZED_RERANK_TABLE = mapOf(
+            "せいか" to "成果",
+            "あげ" to "上げ",
+            "あげた" to "上げた",
+            "べんきょうして" to "勉強して",
             "てんき" to "天気",
             "かんじ" to "漢字",
             "わたし" to "私",

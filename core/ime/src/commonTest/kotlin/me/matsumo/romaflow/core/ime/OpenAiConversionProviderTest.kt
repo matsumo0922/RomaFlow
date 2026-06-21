@@ -11,6 +11,10 @@ import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import me.matsumo.romaflow.core.ime.shadow.DecisionRegion
+import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest
+import me.matsumo.romaflow.core.ime.shadow.RegionOption
+import me.matsumo.romaflow.core.morphology.LexemeEntry
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -240,6 +244,65 @@ class OpenAiConversionProviderTest {
         assertEquals(-1, result)
     }
 
+    @Test
+    fun rerankFactorized_returnsChoicesFromStructuredOutput() = runTest {
+        // モックが `{"choices":[{"region_id":"r0","option_id":"r0o1"}]}` を返すとき
+        // rerankFactorized() が r0→r0o1 の choices を返すこと（正常系）
+        val engine = MockEngine {
+            respond(
+                content = FACTORIZED_RERANK_SUCCESS_RESPONSE_JSON,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
+
+        val result = provider.rerankFactorized(factorizedRerankRequest())
+
+        assertEquals(mapOf("r0" to "r0o1"), result.choices)
+
+        // Structured Outputs の response_format と json_schema が送出されていること
+        val requestBody = requestBodyText(engine.requestHistory.single().body)
+        assertTrue(requestBody.contains("response_format"))
+        assertTrue(requestBody.contains("json_schema"))
+        assertTrue(requestBody.contains("factorized_rerank_selection"))
+    }
+
+    @Test
+    fun rerankFactorized_returnsEmptyChoicesOnMalformedJson() = runTest {
+        // 不正 JSON → parseFactorizedRerankResult が choices 空を返すこと
+        val engine = MockEngine {
+            respond(
+                content = MALFORMED_RERANK_RESPONSE_JSON,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
+
+        val result = provider.rerankFactorized(factorizedRerankRequest())
+
+        assertTrue(result.choices.isEmpty())
+    }
+
+    @Test
+    fun rerankFactorized_skipsOutOfRangeOptionId() = runTest {
+        // option_id が実在しない "r0o99" を返したとき、当該 region が choices に含まれないこと
+        val engine = MockEngine {
+            respond(
+                content = FACTORIZED_RERANK_OUT_OF_RANGE_RESPONSE_JSON,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
+
+        val result = provider.rerankFactorized(factorizedRerankRequest())
+
+        // r0o99 は有効な option_id でないため r0 が choices に入らないこと
+        assertFalse(result.choices.containsKey("r0"))
+    }
+
     private companion object {
         const val SUCCESS_RESPONSE_JSON =
             """{"choices":[{"message":{"role":"assistant","content":"日本語"}}]}"""
@@ -264,6 +327,14 @@ class OpenAiConversionProviderTest {
         // rerank テスト用: 不正 JSON（`"index"` キーが無い）→ parseRerankIndex が -1 を返すことを確認
         const val MALFORMED_RERANK_RESPONSE_JSON =
             """{"choices":[{"message":{"role":"assistant","content":"not-json"}}]}"""
+
+        // rerankFactorized テスト用: r0→r0o1 の正常レスポンス
+        const val FACTORIZED_RERANK_SUCCESS_RESPONSE_JSON =
+            """{"choices":[{"message":{"role":"assistant","content":"{\"choices\":[{\"region_id\":\"r0\",\"option_id\":\"r0o1\"}]}"}}]}"""
+
+        // rerankFactorized テスト用: 存在しない option_id（r0o99）→ 当該 region が未選択になることを確認
+        const val FACTORIZED_RERANK_OUT_OF_RANGE_RESPONSE_JSON =
+            """{"choices":[{"message":{"role":"assistant","content":"{\"choices\":[{\"region_id\":\"r0\",\"option_id\":\"r0o99\"}]}"}}]}"""
     }
 }
 
@@ -301,4 +372,31 @@ private fun jsonClient(engine: MockEngine): HttpClient {
             json(Json { ignoreUnknownKeys = true })
         }
     }
+}
+
+/**
+ * テスト用の [FactorizedRerankRequest]。
+ *
+ * region r0 に option r0o0（愛）と r0o1（藍）の2件を持つシンプルな request。
+ * MockEngine テストでは LLM 応答内容のみを検証するため、lexemePath は空でよい。
+ */
+private fun factorizedRerankRequest(): FactorizedRerankRequest {
+    val stubLexeme = LexemeEntry(surface = "", reading = "", lcAttr = 0, rcAttr = 0, posId = 0, wcost = 0)
+    val options = listOf(
+        RegionOption(id = "r0o0", surface = "愛", lexemePath = listOf(stubLexeme)),
+        RegionOption(id = "r0o1", surface = "藍", lexemePath = listOf(stubLexeme)),
+    )
+    val region = DecisionRegion(
+        id = "r0",
+        reading = "あい",
+        readingStart = 0,
+        readingEnd = 2,
+        options = options,
+    )
+
+    return FactorizedRerankRequest(
+        template = "{r0}",
+        prefixContext = "",
+        regions = listOf(region),
+    )
 }

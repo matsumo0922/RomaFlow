@@ -96,6 +96,7 @@ class RomaFlowEngineCutoverTest {
             aligner = FakeAligner(),
             readingLexiconFactory = { StubEmptyReadingLexicon },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
+            rerankMode = RerankMode.Flat,
         )
         recordingEngine.inputRomaji("on")
 
@@ -143,6 +144,7 @@ class RomaFlowEngineCutoverTest {
             aligner = FakeAligner(),
             readingLexiconFactory = { StubEmptyReadingLexicon },
             connectionCostProviderFactory = { ZeroConnectionCostProvider },
+            rerankMode = RerankMode.Flat,
         )
         engine.inputRomaji("watashitenki")
         engine.applyConversion(engine.convert())
@@ -271,6 +273,12 @@ private class PassThroughConversionProvider : ConversionProvider {
         lastRerankRequest = request
         return -1
     }
+
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult {
+        return me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult(choices = emptyMap())
+    }
 }
 
 /**
@@ -290,6 +298,12 @@ private object FailingConversionProvider : ConversionProvider {
 
     override suspend fun rerank(request: RerankRequest): Int {
         error("rerank failed for testing")
+    }
+
+    override suspend fun rerankFactorized(
+        request: me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest,
+    ): me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult {
+        error("rerankFactorized failed for testing")
     }
 }
 
