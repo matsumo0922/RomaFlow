@@ -171,6 +171,75 @@ class OpenAiConversionProviderTest {
         assertFalse(requestBody.contains("response_format"))
     }
 
+    @Test
+    fun rerank_returnsIndexFromStructuredOutput() = runTest {
+        // モックが `{"index": 2}` を返すとき rerank() が 2 を返すこと（正常系）
+        val engine = MockEngine {
+            respond(
+                content = RERANK_INDEX_2_RESPONSE_JSON,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
+
+        // 候補が3件（index 0-2）あるとき index 2 は有効範囲内
+        val result = provider.rerank(rerankRequest(candidatesSize = 3))
+
+        assertEquals(2, result)
+
+        // Structured Outputs の response_format が送出されていること
+        val requestBody = requestBodyText(engine.requestHistory.single().body)
+        assertTrue(requestBody.contains("response_format"))
+        assertTrue(requestBody.contains("json_schema"))
+    }
+
+    @Test
+    fun rerank_clampsOutOfRangeIndexToMinusOne() = runTest {
+        // モックが候補数（3件）より大きい index 99 を返すとき -1 にクランプされること
+        val engine = MockEngine {
+            respond(
+                content = RERANK_INDEX_99_RESPONSE_JSON,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
+
+        val result = provider.rerank(rerankRequest(candidatesSize = 3))
+
+        assertEquals(-1, result)
+    }
+
+    @Test
+    fun rerank_returnsMinusOneWhenApiKeyMissing() = runTest {
+        // apiKey 空 → ネットワークに行かず -1
+        val engine = MockEngine { error("API は key 未設定時に呼ばれてはいけない") }
+        val provider = OpenAiConversionProvider(testConfig(""), jsonClient(engine))
+
+        val result = provider.rerank(rerankRequest(candidatesSize = 3))
+
+        assertEquals(-1, result)
+        assertTrue(engine.requestHistory.isEmpty())
+    }
+
+    @Test
+    fun rerank_returnsMinusOneOnMalformedJson() = runTest {
+        // 不正 JSON → parseRerankIndex が失敗して -1
+        val engine = MockEngine {
+            respond(
+                content = MALFORMED_RERANK_RESPONSE_JSON,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val provider = OpenAiConversionProvider(testConfig("test-key"), jsonClient(engine))
+
+        val result = provider.rerank(rerankRequest(candidatesSize = 3))
+
+        assertEquals(-1, result)
+    }
+
     private companion object {
         const val SUCCESS_RESPONSE_JSON =
             """{"choices":[{"message":{"role":"assistant","content":"日本語"}}]}"""
@@ -183,12 +252,34 @@ class OpenAiConversionProviderTest {
 
         const val ECHOED_PREFIX_RESPONSE_JSON =
             """{"choices":[{"message":{"role":"assistant","content":"今日は良い天気"}}]}"""
+
+        // rerank テスト用: Structured Outputs で `{"index": 2}` を返すモックレスポンス
+        const val RERANK_INDEX_2_RESPONSE_JSON =
+            """{"choices":[{"message":{"role":"assistant","content":"{\"index\":2}"}}]}"""
+
+        // rerank テスト用: 候補数（3件）を超える index 99 → -1 クランプを確認
+        const val RERANK_INDEX_99_RESPONSE_JSON =
+            """{"choices":[{"message":{"role":"assistant","content":"{\"index\":99}"}}]}"""
+
+        // rerank テスト用: 不正 JSON（`"index"` キーが無い）→ parseRerankIndex が -1 を返すことを確認
+        const val MALFORMED_RERANK_RESPONSE_JSON =
+            """{"choices":[{"message":{"role":"assistant","content":"not-json"}}]}"""
     }
 }
 
 /** readingInput だけを設定した lock 無しの [ConversionRequest]。 */
 private fun conversionRequest(readingInput: String): ConversionRequest {
     return ConversionRequest(readingInput, "")
+}
+
+/**
+ * テスト用の [RerankRequest]。reading は "てんき"、prefixContext は空、候補は [candidatesSize] 件。
+ *
+ * 候補の内容はテスト本体のアサートには影響しない（index の範囲判定のみに使う）。
+ */
+private fun rerankRequest(candidatesSize: Int): RerankRequest {
+    val candidates = List(candidatesSize) { index -> "候補$index" }
+    return RerankRequest(reading = "てんき", prefixContext = "", candidates = candidates)
 }
 
 /** 送信された [OutgoingContent] を UTF-8 文字列として読み出す。JSON ボディは ByteArrayContent。 */

@@ -3,10 +3,12 @@ package me.matsumo.romaflow.core.ime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import me.matsumo.romaflow.core.ime.shadow.CompositionGraph
 import me.matsumo.romaflow.core.ime.shadow.CompositionState
 import me.matsumo.romaflow.core.ime.shadow.LegacyFullTextResolver
 import me.matsumo.romaflow.core.ime.shadow.PinnedPathConstraint
 import me.matsumo.romaflow.core.ime.shadow.ProposalApplier
+import me.matsumo.romaflow.core.ime.shadow.RerankResolver
 import me.matsumo.romaflow.core.ime.shadow.ResolutionProposal
 import me.matsumo.romaflow.core.ime.shadow.ResolutionRequest
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
@@ -24,10 +26,13 @@ import me.matsumo.romaflow.core.morphology.defaultConnectionCostProvider
  * IMKInputController インスタンスごとに1つ生成され、[ConversionDraft]（romaji 入力層・変換済 segment・
  * 単語選択）を持つ。入力は 2 レイヤに分かれ、romaji→kana は末尾の pendingRomaji にだけ増分適用し、
  * 確定したかなは readingInput に frozen として積む。kana→kanji は Tab 起動で readingInput 全体を
- * resolver（[LegacyFullTextResolver]）に投入し、§6 検証（[ProposalApplier]）を経由して verified path
- * → projected segments へ変換する（A-5 cutover）。変換結果の各 segment は [ReadingAligner] で
+ * 既定 resolver（[RerankResolver]）に投入し、格子 N-best から LLM に index で選ばせた候補を
+ * §6 検証（[ProposalApplier]）を経由して verified path → projected segments へ変換する（A-rerank）。
+ * [LegacyFullTextResolver] は A-4 比較用に温存。変換結果の各 segment は [ReadingAligner] で
  * readingInput 上の [TextRange] に対応付け、per-segment の revert・削除を range 単位で扱う。
- * 格子上に経路が存在しない OOV/自由漢字は legacy [buildTailSegments] fallback で回帰ゼロを保証する。
+ * rerank 失敗・preferredSurface が格子外の場合は辞書 Viterbi 1位（rank-0）へ fallback する
+ * （[buildViterbiFallbackTailSegments]）。OOV/自由漢字は compositeLexicon の literal arc で
+ * verified literal path となるため、legacy [buildTailSegments] は graph が空の最終手段としてのみ残す。
  * 公開 API は Swift Export に合わせ String / Int / Boolean / suspend のみを受け渡しする（List は出さない）。
  *
  * ## A-5 cutover: lexicon / costProvider 注入
@@ -99,7 +104,19 @@ class RomaFlowEngine internal constructor(
         )
     }
 
+    // A4 比較用に残す（A4ResolverComparisonTest で直接インスタンス化されるため engine 側は未参照になるが意図的）
+    @Suppress("UnusedPrivateProperty")
     private val legacyResolver: LegacyFullTextResolver by lazy { LegacyFullTextResolver(conversionProvider) }
+
+    // 既定 resolver（A-rerank）。格子 N-best から LLM に index で選ばせ、捏造を構造的に防ぐ。
+    // legacyResolver は A4 比較用に残す。
+    private val rerankResolver: RerankResolver by lazy {
+        RerankResolver(
+            conversionProvider = conversionProvider,
+            lexicon = compositeLexicon,
+            costProvider = connectionCostProvider,
+        )
+    }
 
     /**
      * Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner・IPADIC 辞書を使う constructor。
@@ -208,9 +225,11 @@ class RomaFlowEngine internal constructor(
             return ""
         }
 
-        // A-5 cutover: conversionProvider.convert() の直接呼び出しを resolver 経由に差し替える。
-        // LegacyFullTextResolver が call1 をラップし、ProposeJointCorrection として返す。
-        // Failure / KeepCurrent は "" を返すことで現状の「空 = 据え置き」と同等の no-op になる。
+        // A-rerank cutover: LegacyFullTextResolver から RerankResolver（既定）に差し替える。
+        // RerankResolver は graph N-best（+ literal/KEEP baseline）から LLM に index で選ばせ、捏造を構造的に防ぐ。
+        // legacyResolver は A4 比較用に残す（参照あり: A4ResolverComparisonTest）。
+        // rerank 失敗時: RerankResolver 内で Viterbi rank-0 surface に fallback し ProposeJointCorrection を返す。
+        // Failure（hasValidPath=false 等）/ KeepCurrent は "" を返すことで「空 = 据え置き」の no-op になる。
         val state = buildResolverState(readingInput, prefixEnd, prefixContext)
         val request = ResolutionRequest(
             state = state,
@@ -218,7 +237,7 @@ class RomaFlowEngine internal constructor(
             graphRevision = 0,
             candidatePackDigest = 0,
         )
-        val proposal = legacyResolver.propose(request)
+        val proposal = rerankResolver.propose(request)
 
         return when (proposal) {
             is ResolutionProposal.ProposeJointCorrection -> proposal.preferredSurface.orEmpty()
@@ -242,9 +261,11 @@ class RomaFlowEngine internal constructor(
         val tailReading = readingInput.substring(prefixEnd.coerceIn(0, readingInput.length))
         val prefixContext = lockedPrefixContext()
 
-        // A-5 cutover: §6 検証（ProposalApplier）を経由して verified path → projected segments へ変換する。
+        // A-rerank: §6 検証（ProposalApplier）を経由して verified path → projected segments へ変換する。
         // ProposalApplier の apply 内部は決定論・network なし。
-        // OOV/自由漢字など格子上に完全経路がない場合は legacy buildTailSegments fallback で回帰ゼロを保証する。
+        // preferredSurface が格子外で verified path が作れない場合は辞書 Viterbi 1位（rank-0）へ fallback する
+        // （buildVerifiedOrFallbackTailSegments）。OOV/自由漢字は compositeLexicon の literal arc で
+        // verified literal path になるため、legacy buildTailSegments は graph が空の最終手段としてのみ使う。
         val proposal = ResolutionProposal.ProposeJointCorrection(
             sourceSpan = SourceSpan(fromAtomIndex = prefixEnd, toAtomIndex = readingInput.length),
             intendedReading = tailReading,
@@ -1014,9 +1035,9 @@ class RomaFlowEngine internal constructor(
      * resolver / applier へ渡す [CompositionState] を最小ブリッジとして構築する。
      *
      * [fullReading] は readingInput 全体、[prefixEnd] は locked prefix の終端（0 = lock なし）、
-     * [prefixContext] は locked prefix の surface 連結。[LegacyFullTextResolver] と [ProposalApplier]
-     * は `state.pinnedConstraint.pinnedSurface`（prefixContext）と `lockedPrefixBoundary`（prefixEnd）
-     * のみを参照するため、synthetic な [LexemeEntry] で pinnedPath を埋める。
+     * [prefixContext] は locked prefix の surface 連結。[RerankResolver]（既定）/ [LegacyFullTextResolver]
+     * と [ProposalApplier] は `state.pinnedConstraint.pinnedSurface`（prefixContext）と
+     * `lockedPrefixBoundary`（prefixEnd）のみを参照するため、synthetic な [LexemeEntry] で pinnedPath を埋める。
      * synthetic の連接 ID は不問（tail path の segment 化に pinnedPath は使わない）。
      * lock 跨ぎの厳密化は A-5 以降の follow-up（設計ドキュメント参照）。
      */
@@ -1065,8 +1086,11 @@ class RomaFlowEngine internal constructor(
      *
      * [resolved] が verified path を持つ場合（[CompositionState.isConverted] = true）は
      * [buildTailSegmentsFromPath] で verified path から segment を生成する。
-     * 格子上に経路が存在しない場合（OOV / 自由漢字等）は legacy [buildTailSegments] fallback で
-     * 当該 surface を segment 表示し、変換結果が消えない現状挙動を維持する（回帰ゼロ）。
+     *
+     * 格子上に経路が存在しない場合（① fallback 厳格化）:
+     * - Viterbi 1位（rank-0）が取れる場合はその経路から segment を構築する（LLM 全文 fallback を不採用）。
+     * - graph が空のとき（compositeLexicon に literal arc があるため通常到達しない）のみ
+     *   最終手段として legacy [buildTailSegments] fallback を使う（回帰ゼロ保証）。
      */
     private fun buildVerifiedOrFallbackTailSegments(
         resolved: CompositionState,
@@ -1078,16 +1102,51 @@ class RomaFlowEngine internal constructor(
         val selectedPathId = resolved.selectedPathId
 
         if (!isVerified || selectedPathId == null) {
-            return buildTailSegments(result, tailReading, offset)
+            return buildViterbiFallbackTailSegments(tailReading, offset, result)
         }
 
         val verifiedPath = resolved.graph.pathOrNull(selectedPathId)
 
         if (verifiedPath == null) {
-            return buildTailSegments(result, tailReading, offset)
+            return buildViterbiFallbackTailSegments(tailReading, offset, result)
         }
 
         return buildTailSegmentsFromPath(verifiedPath, tailReading, offset)
+    }
+
+    /**
+     * Viterbi 1位（辞書 rank-0）の経路から tail segment を構築する（① fallback 厳格化）。
+     *
+     * [resolved] が verified でない場合のフォールバック。格子を再構築して rank-0 を採用し、
+     * LLM 全文 fallback（旧 [buildTailSegments]）を不採用にする。
+     * compositeLexicon は literal arc を持つため [CompositionGraph.hasValidPath] は通常 true になる。
+     * graph が空の場合のみ最終手段として legacy [buildTailSegments] を使う。
+     */
+    private fun buildViterbiFallbackTailSegments(
+        tailReading: String,
+        offset: Int,
+        legacyFallbackSurface: String,
+    ): List<Segment> {
+        if (tailReading.isEmpty()) {
+            return buildTailSegments(legacyFallbackSurface, tailReading, offset)
+        }
+
+        val graph = CompositionGraph.build(
+            reading = tailReading,
+            lexicon = compositeLexicon,
+            costProvider = connectionCostProvider,
+        )
+
+        val bestPathId = graph.bestPathId
+
+        if (bestPathId == null) {
+            // compositeLexicon に literal arc があるため通常ここには到達しない
+            return buildTailSegments(legacyFallbackSurface, tailReading, offset)
+        }
+
+        val bestPath = graph.pathOrNull(bestPathId) ?: return buildTailSegments(legacyFallbackSurface, tailReading, offset)
+
+        return buildTailSegmentsFromPath(bestPath, tailReading, offset)
     }
 
     /**

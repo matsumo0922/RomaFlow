@@ -32,6 +32,31 @@ internal class FakeConversionProvider : ConversionProvider {
         return Json.encodeToString(WordCandidatePayload(candidates))
     }
 
+    /**
+     * 決定的な rerank スタブ。
+     *
+     * テスト・開発用。[RERANK_TABLE] に読みが存在する場合はその優先候補を候補リストから探して
+     * index を返す。見つからない場合は 0（コスト最小の Viterbi 1位相当）を返す。
+     * 候補が空の場合は -1（失敗）を返す。
+     */
+    override suspend fun rerank(request: RerankRequest): Int {
+        if (request.candidates.isEmpty()) {
+            return -1
+        }
+
+        val preferredSurface = RERANK_TABLE[request.reading]
+
+        if (preferredSurface != null) {
+            val preferredIndex = request.candidates.indexOf(preferredSurface)
+
+            if (preferredIndex >= 0) {
+                return preferredIndex
+            }
+        }
+
+        return 0
+    }
+
     private companion object {
         /**
          * かなの読みと変換後の漢字の対応表。
@@ -57,6 +82,21 @@ internal class FakeConversionProvider : ConversionProvider {
             "てんき" to listOf("天気", "転機", "てんき", "テンキ"),
             "かんじ" to listOf("漢字", "幹事", "かんじ", "カンジ"),
             "わたし" to listOf("私", "わたし", "ワタシ"),
+        )
+
+        /**
+         * rerank（call3）の決定的スタブ用変換表。
+         *
+         * 読みから優先すべき候補表層形を定義する。[CONVERSION_TABLE] と整合し、同音異義語文脈で
+         * 正しい候補を選択できることをテストで確認するために使う。
+         */
+        val RERANK_TABLE = mapOf(
+            "てんき" to "天気",
+            "かんじ" to "漢字",
+            "わたし" to "私",
+            "にほんご" to "日本語",
+            "とうきょう" to "東京",
+            "へんかん" to "変換",
         )
     }
 }

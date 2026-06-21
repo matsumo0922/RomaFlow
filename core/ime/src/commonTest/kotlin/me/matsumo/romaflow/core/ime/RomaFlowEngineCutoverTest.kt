@@ -87,7 +87,8 @@ class RomaFlowEngineCutoverTest {
     @Test
     fun convert_pendingFinalizationApplied_beforeConvert() = runTest {
         // "on" を入力すると pending "n" が残る
-        // provider は読みをそのまま返す PassThroughConversionProvider を使って確認する
+        // A-rerank cutover 後は RerankResolver が provider.rerank() を呼ぶため、
+        // PassThroughConversionProvider の lastRerankRequest で reading を確認する
         val recording = PassThroughConversionProvider()
         val recordingEngine = RomaFlowEngine(
             conversionProvider = recording,
@@ -101,14 +102,20 @@ class RomaFlowEngineCutoverTest {
         recordingEngine.convert()
 
         // provider に渡った reading は "おん"（pending n→ん が確定済み）であること
-        val request = requireNotNull(recording.lastRequest)
-        assertEquals("おん", request.readingInput)
+        val rerankRequest = requireNotNull(recording.lastRerankRequest)
+        assertEquals("おん", rerankRequest.reading)
     }
 
     @Test
-    fun failureProvider_convertReturnsEmpty() = runTest {
-        // provider が例外を投げた場合、convert() が "" を返すこと（failure no-op）
-        // LegacyFullTextResolver は runCatching で failure を受け取り Failure proposal を返す
+    fun failureProvider_convertFallsBackToViterbi() = runTest {
+        // provider の rerank() が例外をスローした場合、RerankResolver が runCatching で catch し
+        // Viterbi rank-0 fallback で変換が続くことを確認する（クラッシュしないこと）。
+        //
+        // FailingConversionProvider は rerank() も throw するため、
+        // selectedIndex = -1 → Viterbi 1位（literal arc のみ = "てんき"）が採用される。
+        //
+        // 注: A-rerank 設計では rerank() 失敗 → no-op ではなく Viterbi fallback で変換が完了する。
+        // failure で変換が no-op になるのは reading が空の場合のみ。
         val failingProvider = FailingConversionProvider
         val engine = RomaFlowEngine(
             conversionProvider = failingProvider,
@@ -121,15 +128,14 @@ class RomaFlowEngineCutoverTest {
 
         val result = engine.convert()
 
-        // 例外 → Failure proposal → "" を返す
-        assertEquals("", result)
+        // rerank() 例外 → catch → -1 → Viterbi 1位（literal arc = "てんき"）
+        assertEquals("てんき", result)
     }
 
     @Test
     fun convert_lockedPrefixProvider_tailReadingPassedToProvider() = runTest {
-        // locked prefix がある場合、provider に tail reading だけが渡ること
-        // これは RomaFlowEngineTest.reconvert_sendsTailReadingAndLockedPrefixContextToProvider と
-        // 同じ不変条件を cutover 後の ProposalApplier 経路で確認する
+        // locked prefix がある場合、RerankResolver に tail reading だけが渡ること
+        // A-rerank cutover 後は provider.rerank() で reading を受け取るため lastRerankRequest で確認する
         val provider = PassThroughConversionProvider()
         val engine = RomaFlowEngine(
             conversionProvider = provider,
@@ -149,13 +155,13 @@ class RomaFlowEngineCutoverTest {
         // segment 0 を1文字（わ）として確定
         engine.confirmCandidate("渡")
 
-        // 再変換: provider に tail reading（わ以外）が渡ること
+        // 再変換: RerankResolver の rerank() に tail reading（わ以外）が渡ること
         engine.convert()
 
-        val request = requireNotNull(provider.lastRequest)
+        val rerankRequest = requireNotNull(provider.lastRerankRequest)
         // locked prefix（"わ"=1文字）以降の tail が渡ること
         val expectedTail = "たしてんき"
-        assertEquals(expectedTail, request.readingInput)
+        assertEquals(expectedTail, rerankRequest.reading)
     }
 
     @Test
@@ -237,29 +243,54 @@ private fun newStubEngine(): RomaFlowEngine {
     )
 }
 
-/** convert() に渡された最後の [ConversionRequest] を記録し、変換結果は読みを素通しで返す provider。 */
+/**
+ * rerank() に渡された最後の [RerankRequest] を記録するテスト用 provider。
+ *
+ * A-rerank cutover 後は [me.matsumo.romaflow.core.ime.shadow.RerankResolver] が convert() ではなく
+ * rerank() を呼ぶため、recording は [lastRerankRequest] で行う。
+ * rerank() は常に -1 を返し、呼び出し側に Viterbi 1位 fallback を使わせる。
+ */
 private class PassThroughConversionProvider : ConversionProvider {
 
+    /** convert() に渡された最後の [ConversionRequest]（旧設計 LegacyFullTextResolver 用）。 */
     var lastRequest: ConversionRequest? = null
+        private set
+
+    /** rerank() に渡された最後の [RerankRequest]（A-rerank 設計用）。 */
+    var lastRerankRequest: RerankRequest? = null
         private set
 
     override suspend fun convert(request: ConversionRequest): String {
         lastRequest = request
-
-        // provider は読みをそのまま返す（後段の ProposalApplier で格子探索するが OOV fallback で処理される）
         return request.readingInput
     }
 
     override suspend fun candidates(request: WordCandidateRequest): String = ""
+
+    override suspend fun rerank(request: RerankRequest): Int {
+        lastRerankRequest = request
+        return -1
+    }
 }
 
-/** 常に例外をスローするテスト用 provider（failure no-op テスト用）。 */
+/**
+ * convert / candidates / rerank の全メソッドで例外をスローするテスト用 provider。
+ *
+ * [RerankResolver] の `runCatching { provider.rerank() }.getOrElse { -1 }` catch 経路を
+ * 実際に通すことで、provider 例外時でもクラッシュせず Viterbi fallback が動くことを検証する。
+ */
 private object FailingConversionProvider : ConversionProvider {
     override suspend fun convert(request: ConversionRequest): String {
         error("conversion failed for testing")
     }
 
-    override suspend fun candidates(request: WordCandidateRequest): String = ""
+    override suspend fun candidates(request: WordCandidateRequest): String {
+        error("candidates failed for testing")
+    }
+
+    override suspend fun rerank(request: RerankRequest): Int {
+        error("rerank failed for testing")
+    }
 }
 
 /**
