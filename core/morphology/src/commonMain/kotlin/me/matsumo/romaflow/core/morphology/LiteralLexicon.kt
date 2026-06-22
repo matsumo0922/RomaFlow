@@ -13,8 +13,13 @@ package me.matsumo.romaflow.core.morphology
  * - その他（記号・未知語）: 記号 arc（wcost=[SYMBOL_WCOST]）
  *
  * surface は入力そのまま、reading はひらがな/カタカナはそのまま、その他は空文字。
+ *
+ * 連接 ID は [contextIds] で辞書（IPADIC / Mozc）に応じて差し替える。既定は [LiteralContextIds.Ipadic]
+ * のためライブ挙動は不変。
  */
-internal class LiteralLexicon : ReadingLexicon {
+internal class LiteralLexicon(
+    private val contextIds: LiteralContextIds = LiteralContextIds.Ipadic,
+) : ReadingLexicon {
 
     override fun commonPrefixSearch(reading: String, startOffset: Int): List<LexemeMatch> {
         if (startOffset >= reading.length) return emptyList()
@@ -22,7 +27,7 @@ internal class LiteralLexicon : ReadingLexicon {
         val character = reading[startOffset]
         val endOffset = startOffset + 1
 
-        val lexeme = buildLiteralLexeme(character)
+        val lexeme = buildLiteralLexeme(character, contextIds)
 
         return listOf(LexemeMatch(readingEndOffset = endOffset, lexeme = lexeme))
     }
@@ -45,25 +50,15 @@ internal class LiteralLexicon : ReadingLexicon {
         const val SYMBOL_WCOST = 12000
 
         /**
-         * ひらがな/カタカナ素通し arc の lcAttr/rcAttr として使う代表 ID。
-         *
-         * IPADIC の助詞（lcAttr=268, rcAttr=268 付近）に相当する汎用 ID 相当として
-         * 非ゼロ値を明示的に設定する。実実装では unk.dic の CHARACTER カテゴリから
-         * 正確な ID を引いてくることが望ましいが、A-2 では固定値で代用する。
-         * 値は IPADIC の一般名詞（lcAttr≈1285, rcAttr≈1285）付近。
-         */
-        private const val HIRAGANA_CONTEXT_ID = 1285
-
-        /** ASCII・数字・記号 arc の連接 ID（独立語相当）。 */
-        private const val SYMBOL_CONTEXT_ID = 1289
-
-        /**
          * 1 文字 [character] に対応する literal [LexemeEntry] を生成する。
          *
-         * ひらがな/カタカナ: reading = character.toString() で素通し。
-         * その他: reading = surface（変換なし）。
+         * 連接 ID は [contextIds]（既定 [LiteralContextIds.Ipadic]）から引く。
+         * ひらがな/カタカナ: reading = character.toString() で素通し。その他: reading = surface（変換なし）。
          */
-        fun buildLiteralLexeme(character: Char): LexemeEntry {
+        fun buildLiteralLexeme(
+            character: Char,
+            contextIds: LiteralContextIds = LiteralContextIds.Ipadic,
+        ): LexemeEntry {
             val surface = character.toString()
             val isHiragana = character.code in 0x3041..0x3096
             val isKatakana = character.code in 0x30A1..0x30F6
@@ -75,32 +70,32 @@ internal class LiteralLexicon : ReadingLexicon {
                 isKanaCharacter -> LexemeEntry(
                     surface = surface,
                     reading = surface,
-                    lcAttr = HIRAGANA_CONTEXT_ID,
-                    rcAttr = HIRAGANA_CONTEXT_ID,
+                    lcAttr = contextIds.kanaContextId,
+                    rcAttr = contextIds.kanaContextId,
                     posId = 0,
                     wcost = HIRAGANA_WCOST,
                 )
                 isDigit -> LexemeEntry(
                     surface = surface,
                     reading = surface,
-                    lcAttr = SYMBOL_CONTEXT_ID,
-                    rcAttr = SYMBOL_CONTEXT_ID,
+                    lcAttr = contextIds.symbolContextId,
+                    rcAttr = contextIds.symbolContextId,
                     posId = 0,
                     wcost = DIGIT_WCOST,
                 )
                 isAsciiLetter -> LexemeEntry(
                     surface = surface,
                     reading = surface,
-                    lcAttr = SYMBOL_CONTEXT_ID,
-                    rcAttr = SYMBOL_CONTEXT_ID,
+                    lcAttr = contextIds.symbolContextId,
+                    rcAttr = contextIds.symbolContextId,
                     posId = 0,
                     wcost = ASCII_WCOST,
                 )
                 else -> LexemeEntry(
                     surface = surface,
                     reading = surface,
-                    lcAttr = SYMBOL_CONTEXT_ID,
-                    rcAttr = SYMBOL_CONTEXT_ID,
+                    lcAttr = contextIds.symbolContextId,
+                    rcAttr = contextIds.symbolContextId,
                     posId = 0,
                     wcost = SYMBOL_WCOST,
                 )
