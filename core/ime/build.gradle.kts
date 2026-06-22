@@ -177,7 +177,12 @@ fun downloadAndVerifyMozcFile(url: String, expectedSha256: String, cacheFile: Fi
 
     cacheFile.parentFile.mkdirs()
 
-    val downloadedBytes = URI(url).toURL().openStream().use { stream -> stream.readBytes() }
+    // ネットワーク取得は cold cache 時のみ（SHA-256 キャッシュは clean 耐性）。CI ハング回避に timeout を設定する。
+    val connection = URI(url).toURL().openConnection().apply {
+        connectTimeout = mozcDownloadTimeoutMs
+        readTimeout = mozcDownloadTimeoutMs
+    }
+    val downloadedBytes = connection.getInputStream().use { stream -> stream.readBytes() }
     val actualSha256 = sha256Hex(downloadedBytes)
 
     require(actualSha256 == expectedSha256) {
@@ -388,3 +393,6 @@ val uint16Max = 0xFFFF
 
 /** u16 マスク。 */
 val uint16Mask = 0xFFFF
+
+/** Mozc 入力ファイル取得の connect/read timeout（ms）。cold cache 時のみ使用。 */
+val mozcDownloadTimeoutMs = 60_000

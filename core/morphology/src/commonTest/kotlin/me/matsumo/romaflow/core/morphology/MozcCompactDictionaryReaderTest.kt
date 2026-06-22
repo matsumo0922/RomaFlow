@@ -48,6 +48,26 @@ class MozcCompactDictionaryReaderTest {
     }
 
     @Test
+    fun rejectsTruncatedDictionary() {
+        val entry = LexemeEntry(surface = "以下", reading = "いか", lcAttr = 1, rcAttr = 1, posId = 1, wcost = 100)
+        val truncated = encodeDictionary(listOf(entry)).let { bytes -> bytes.copyOf(bytes.size - 3) }
+
+        assertFailsWith<IllegalArgumentException> {
+            MozcCompactDictionaryReader.readEntries(truncated)
+        }
+    }
+
+    @Test
+    fun rejectsDictionaryWithTrailingBytes() {
+        val entry = LexemeEntry(surface = "以下", reading = "いか", lcAttr = 1, rcAttr = 1, posId = 1, wcost = 100)
+        val withTrailing = encodeDictionary(listOf(entry)) + byteArrayOf(0)
+
+        assertFailsWith<IllegalArgumentException> {
+            MozcCompactDictionaryReader.readEntries(withTrailing)
+        }
+    }
+
+    @Test
     fun preservesMultiByteUtf8Readings() {
         val entries = listOf(
             LexemeEntry(surface = "ヴァイオリン", reading = "う゛ぁいおりん", lcAttr = 1, rcAttr = 2, posId = 1, wcost = 9000),

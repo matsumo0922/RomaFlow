@@ -40,18 +40,28 @@ object MozcCompactDictionaryReader {
     /** バイト→符号なし変換のマスク。 */
     private const val BYTE_MASK = 0xFF
 
-    /** [dictBytes]（`mozc_dict.bin`）を decode して全 [LexemeEntry] を返す。 */
+    /**
+     * [dictBytes]（`mozc_dict.bin`）を decode して全 [LexemeEntry] を返す。
+     *
+     * count ヘッダや各フィールド長は信頼せず、すべての読みを境界チェックし、末尾余剰バイトも拒否する
+     * （生成物は信頼できるが、本 reader は U2c ランタイム経路にもなるため壊れた binary を確定的に弾く）。
+     */
     fun readEntries(dictBytes: ByteArray): List<LexemeEntry> {
         val cursor = ByteCursor(dictBytes)
 
         cursor.expectMagic(DICT_MAGIC)
 
         val entryCount = cursor.readInt32()
+
+        require(entryCount >= 0) { "エントリ数が不正です: $entryCount" }
+
         val entries = ArrayList<LexemeEntry>(entryCount)
 
         repeat(entryCount) {
             entries.add(readEntry(cursor))
         }
+
+        cursor.requireExhausted()
 
         return entries
     }
@@ -63,12 +73,20 @@ object MozcCompactDictionaryReader {
         cursor.expectMagic(MATRIX_MAGIC)
 
         val dimension = cursor.readInt32()
-        val valueCount = dimension * dimension
-        val costs = ShortArray(valueCount)
 
-        for (index in 0 until valueCount) {
+        require(dimension > 0) { "連接行列の次元が不正です: $dimension" }
+
+        val valueCount = dimension.toLong() * dimension.toLong()
+
+        require(valueCount <= Int.MAX_VALUE) { "連接行列が大きすぎます: dim=$dimension" }
+
+        val costs = ShortArray(valueCount.toInt())
+
+        for (index in costs.indices) {
             costs[index] = cursor.readInt16().toShort()
         }
+
+        cursor.requireExhausted()
 
         return MozcConnectionCostProvider(dimension, costs)
     }
@@ -105,6 +123,9 @@ object MozcCompactDictionaryReader {
 
         fun readString(): String {
             val length = readUInt16()
+
+            requireAvailable(length)
+
             val endIndex = offset + length
             val text = bytes.decodeToString(offset, endIndex)
 
@@ -114,6 +135,8 @@ object MozcCompactDictionaryReader {
         }
 
         fun expectMagic(magic: String) {
+            requireAvailable(MAGIC_LENGTH)
+
             val actual = bytes.decodeToString(offset, offset + MAGIC_LENGTH)
 
             require(actual == magic) {
@@ -123,7 +146,15 @@ object MozcCompactDictionaryReader {
             offset += MAGIC_LENGTH
         }
 
+        fun requireExhausted() {
+            require(offset == bytes.size) {
+                "compact binary に余剰バイトがあります: offset=$offset size=${bytes.size}"
+            }
+        }
+
         private fun readLittleEndian(byteCount: Int): Int {
+            requireAvailable(byteCount)
+
             var value = 0
 
             for (byteIndex in 0 until byteCount) {
@@ -134,6 +165,12 @@ object MozcCompactDictionaryReader {
             offset += byteCount
 
             return value
+        }
+
+        private fun requireAvailable(byteCount: Int) {
+            require(offset + byteCount <= bytes.size) {
+                "compact binary が途中で終端しました: offset=$offset need=$byteCount size=${bytes.size}"
+            }
         }
     }
 }
