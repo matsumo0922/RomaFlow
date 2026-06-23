@@ -26,22 +26,22 @@ object MozcCompactDictionaryReader {
     private const val MATRIX_MAGIC = "MZM1"
 
     /** マジックのバイト長。 */
-    private const val MAGIC_LENGTH = 4
+    internal const val MAGIC_LENGTH = 4
 
     /** i32 のバイト長。 */
-    private const val INT32_BYTES = 4
+    internal const val INT32_BYTES = 4
 
     /** i16 / u16 のバイト長。 */
-    private const val INT16_BYTES = 2
+    internal const val INT16_BYTES = 2
 
     /** 1 エントリの最小バイト数（readingLen + surfaceLen + lid + rid + cost、文字列 0 長時）。 */
-    private const val MIN_ENTRY_BYTES = 10
+    internal const val MIN_ENTRY_BYTES = 10
 
     /** 1 バイト分のビット幅。 */
-    private const val BITS_PER_BYTE = 8
+    internal const val BITS_PER_BYTE = 8
 
     /** バイト→符号なし変換のマスク。 */
-    private const val BYTE_MASK = 0xFF
+    internal const val BYTE_MASK = 0xFF
 
     /**
      * [dictBytes]（`mozc_dict.bin`）を decode して全 [LexemeEntry] を返す。
@@ -50,7 +50,7 @@ object MozcCompactDictionaryReader {
      * （生成物は信頼できるが、本 reader は U2c ランタイム経路にもなるため壊れた binary を確定的に弾く）。
      */
     fun readEntries(dictBytes: ByteArray): List<LexemeEntry> {
-        val cursor = ByteCursor(dictBytes)
+        val cursor = MozcByteCursor(dictBytes)
 
         cursor.expectMagic(DICT_MAGIC)
 
@@ -76,7 +76,7 @@ object MozcCompactDictionaryReader {
 
     /** [matrixBytes]（`mozc_matrix.bin`）を decode して連接コスト provider を返す。 */
     fun readConnectionCostProvider(matrixBytes: ByteArray): MozcConnectionCostProvider {
-        val cursor = ByteCursor(matrixBytes)
+        val cursor = MozcByteCursor(matrixBytes)
 
         cursor.expectMagic(MATRIX_MAGIC)
 
@@ -104,7 +104,19 @@ object MozcCompactDictionaryReader {
         return MozcConnectionCostProvider(dimension, costs)
     }
 
-    private fun readEntry(cursor: ByteCursor): LexemeEntry {
+    /**
+     * [dictBytes] の [byteOffset] から 1 エントリを decode して [LexemeEntry] を返す。
+     *
+     * [MozcCompactLexicon] の on-demand decode 経路で使う。[byteOffset] は entryOffsets が保持する
+     * エントリ先頭バイト位置（マジック + count ヘッダより後の実データ部分）。
+     */
+    internal fun decodeEntryAt(dictBytes: ByteArray, byteOffset: Int): LexemeEntry {
+        val cursor = MozcByteCursor(dictBytes, startOffset = byteOffset)
+
+        return readEntry(cursor)
+    }
+
+    private fun readEntry(cursor: MozcByteCursor): LexemeEntry {
         val reading = cursor.readString()
         val surface = cursor.readString()
         val leftContextId = cursor.readUInt16()
@@ -120,72 +132,99 @@ object MozcCompactDictionaryReader {
             wcost = wordCost,
         )
     }
+}
+
+/**
+ * MZD1 / MZM1 バイト列を指定 offset から順に読み進めるカーソル。すべて little-endian。
+ *
+ * [MozcCompactDictionaryReader] の decode ロジックと [MozcCompactLexicon] の on-demand decode
+ * 経路で共用する。[startOffset] を指定することで、バイト列の途中から読み始めることができる。
+ */
+internal class MozcByteCursor(
+    private val bytes: ByteArray,
+    startOffset: Int = 0,
+) {
+
+    private var offset = startOffset
+
+    fun readInt32(): Int = readLittleEndian(MozcCompactDictionaryReader.INT32_BYTES)
+
+    fun readUInt16(): Int = readLittleEndian(MozcCompactDictionaryReader.INT16_BYTES)
+
+    fun readInt16(): Int = readUInt16().toShort().toInt()
+
+    fun readString(): String {
+        val length = readUInt16()
+
+        requireAvailable(length)
+
+        val endIndex = offset + length
+        val text = bytes.decodeToString(offset, endIndex)
+
+        offset = endIndex
+
+        return text
+    }
 
     /**
-     * バイト列を先頭から順に読み進めるカーソル。すべて little-endian。
+     * u16 で読み始め、その長さ分のバイト列の先頭バイト offset を返す（文字列を decode しない）。
+     *
+     * [MozcCompactLexicon] の構築パスで、reading バイト列のオフセット・長さを on-the-fly で
+     * 取得するために使う（String alloc を避ける）。呼び出し後にカーソルは文字列末尾に進む。
      */
-    private class ByteCursor(private val bytes: ByteArray) {
+    fun readStringRaw(): Pair<Int, Int> {
+        val length = readUInt16()
 
-        private var offset = 0
+        requireAvailable(length)
 
-        fun readInt32(): Int = readLittleEndian(INT32_BYTES)
+        val startIndex = offset
 
-        fun readUInt16(): Int = readLittleEndian(INT16_BYTES)
+        offset += length
 
-        fun readInt16(): Int = readUInt16().toShort().toInt()
+        return Pair(startIndex, length)
+    }
 
-        fun readString(): String {
-            val length = readUInt16()
+    fun expectMagic(magic: String) {
+        requireAvailable(MozcCompactDictionaryReader.MAGIC_LENGTH)
 
-            requireAvailable(length)
+        val actual = bytes.decodeToString(offset, offset + MozcCompactDictionaryReader.MAGIC_LENGTH)
 
-            val endIndex = offset + length
-            val text = bytes.decodeToString(offset, endIndex)
-
-            offset = endIndex
-
-            return text
+        require(actual == magic) {
+            "compact binary のマジックが不正です: expected=$magic actual=$actual"
         }
 
-        fun expectMagic(magic: String) {
-            requireAvailable(MAGIC_LENGTH)
+        offset += MozcCompactDictionaryReader.MAGIC_LENGTH
+    }
 
-            val actual = bytes.decodeToString(offset, offset + MAGIC_LENGTH)
+    fun requireExhausted() {
+        require(offset == bytes.size) {
+            "compact binary に余剰バイトがあります: offset=$offset size=${bytes.size}"
+        }
+    }
 
-            require(actual == magic) {
-                "compact binary のマジックが不正です: expected=$magic actual=$actual"
-            }
+    fun remaining(): Int = bytes.size - offset
 
-            offset += MAGIC_LENGTH
+    /** 現在のカーソル位置を返す（エントリ先頭 offset の記録に使う）。 */
+    fun currentOffset(): Int = offset
+
+    private fun readLittleEndian(byteCount: Int): Int {
+        requireAvailable(byteCount)
+
+        var value = 0
+
+        for (byteIndex in 0 until byteCount) {
+            val byteValue = bytes[offset + byteIndex].toInt() and MozcCompactDictionaryReader.BYTE_MASK
+            value = value or (byteValue shl (byteIndex * MozcCompactDictionaryReader.BITS_PER_BYTE))
         }
 
-        fun requireExhausted() {
-            require(offset == bytes.size) {
-                "compact binary に余剰バイトがあります: offset=$offset size=${bytes.size}"
-            }
-        }
+        offset += byteCount
 
-        fun remaining(): Int = bytes.size - offset
+        return value
+    }
 
-        private fun readLittleEndian(byteCount: Int): Int {
-            requireAvailable(byteCount)
-
-            var value = 0
-
-            for (byteIndex in 0 until byteCount) {
-                val byteValue = bytes[offset + byteIndex].toInt() and BYTE_MASK
-                value = value or (byteValue shl (byteIndex * BITS_PER_BYTE))
-            }
-
-            offset += byteCount
-
-            return value
-        }
-
-        private fun requireAvailable(byteCount: Int) {
-            require(offset + byteCount <= bytes.size) {
-                "compact binary が途中で終端しました: offset=$offset need=$byteCount size=${bytes.size}"
-            }
+    private fun requireAvailable(byteCount: Int) {
+        require(offset + byteCount <= bytes.size) {
+            "compact binary が途中で終端しました: offset=$offset need=$byteCount size=${bytes.size}"
         }
     }
 }

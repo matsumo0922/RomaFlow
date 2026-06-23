@@ -7,12 +7,22 @@ import kotlin.concurrent.Volatile
  *
  * [IpadicHomophoneDictionary] と同じく「読み→表層候補」の逆引き index を1回だけ構築してキャッシュするが、
  * Mozc は reading が既に hiragana のためカタカナ正規化は防御的に通すだけになる。index 構築は重い
- * （~1.29M 件）ため [lazyIndex] を `by lazy` とし [ensureReady] からのみ走らせる。[entriesProvider] は
+ * （~1.29M 件）ため [lazyIndex] を `by lazy` とし [ensureReady] からのみ走らせる。[indexProvider] は
  * [lazyIndex] のクロージャ内だけで参照し property 保持しないため、構築完了後にエントリ列が GC 可能になる。
+ *
+ * ## streaming 経路（U2c）
+ * [fromCompactLexicon] factory で構築すると、[MozcCompactLexicon.buildStreamingHomophoneIndex]
+ * 経由でインデックスが作られる。LexemeEntry の全 List も中間 groupBy Map も作らない（heap 削減）。
+ *
+ * ## コンストラクタ
+ * `entriesProvider: () -> List<LexemeEntry>` と `compactLexiconProvider: () -> MozcCompactLexicon` は
+ * ラムダ型が衝突して overload 解決できないため、factory method（[fromEntries] / [fromCompactLexicon]）を使う。
  */
-class MozcHomophoneDictionary(entriesProvider: () -> List<LexemeEntry>) : HomophoneDictionary {
+class MozcHomophoneDictionary private constructor(
+    indexProvider: () -> Map<String, List<String>>,
+) : HomophoneDictionary {
 
-    private val lazyIndex: Lazy<Map<String, List<String>>> = lazy { buildReverseIndex(entriesProvider()) }
+    private val lazyIndex: Lazy<Map<String, List<String>>> = lazy { indexProvider() }
 
     @Volatile
     private var isReady = false
@@ -43,6 +53,24 @@ class MozcHomophoneDictionary(entriesProvider: () -> List<LexemeEntry>) : Homoph
          * あるため、出現しやすい上位（単語コスト昇順）のみを残す。[IpadicHomophoneDictionary] と同値。
          */
         const val MAX_CANDIDATES_PER_READING = 30
+
+        /**
+         * [LexemeEntry] リストから [MozcHomophoneDictionary] を生成する factory。
+         *
+         * [buildReverseIndex] で groupBy ベースのインデックスを構築する既存経路。
+         * [MozcCompactDictionaryReader.readEntries] 等で取得したエントリ列を渡す。
+         */
+        fun fromEntries(entriesProvider: () -> List<LexemeEntry>): MozcHomophoneDictionary =
+            MozcHomophoneDictionary { buildReverseIndex(entriesProvider()) }
+
+        /**
+         * [MozcCompactLexicon] を使う streaming 経路（U2c）から [MozcHomophoneDictionary] を生成する factory。
+         *
+         * [MozcCompactLexicon.buildStreamingHomophoneIndex] が sortedOrder の 1 パスグループ化で
+         * 同音語 index を構築するため、LexemeEntry の List も中間 groupBy Map も生成しない。
+         */
+        fun fromCompactLexicon(compactLexiconProvider: () -> MozcCompactLexicon): MozcHomophoneDictionary =
+            MozcHomophoneDictionary { compactLexiconProvider().buildStreamingHomophoneIndex() }
 
         /**
          * [entries] から、ひらがなキー → 表層候補リストの逆引き index を構築する純関数。
