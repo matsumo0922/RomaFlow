@@ -2,6 +2,7 @@ package me.matsumo.romaflow.core.morphology
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /**
  * [MozcCompactLexicon] と [EntryListReadingLexicon] の commonPrefixSearch 結果が完全一致することを検証する。
@@ -152,6 +153,86 @@ class MozcCompactLexiconParityTest {
         assertMatchListEquals(entryListResult, compactResult, "ぶん startOffset=0")
     }
 
+    // ---- カタカナ混じり reading の正規化 parity テスト（修正1 ロック）----
+
+    /**
+     * reading にカタカナ（`ヶ`）が混じるエントリで、[MozcCompactLexicon] と [EntryListReadingLexicon] の
+     * commonPrefixSearch 結果が完全一致することを検証する。
+     *
+     * [EntryListReadingLexicon.buildReverseIndex] は [IpadicReadingLexicon.katakanaToHiragana] で
+     * reading を正規化してから index 化する。[MozcCompactLexicon] も同一正規化を通さないと、
+     * `ヶ`（U+30F6）→ `ゖ`（U+3096）への変換が行われず parity が崩れる。
+     * 実 Mozc dict に存在する `ヶ` 含む reading（例: 三ヶ月 → さんヶげつ のようなケース）を模したテスト。
+     */
+    @Test
+    fun commonPrefixSearchKatakanaInReadingNormalized() {
+        // reading に `ヶ` を含むエントリ。katakanaToHiragana で `ヶ`→`ゖ` に変換される。
+        val katakanaReadingEntries = listOf(
+            entry(surface = "一ヶ月", reading = "いちヶげつ", lcAttr = 1845, rcAttr = 1845, wcost = 2000),
+            entry(surface = "三ヶ月", reading = "さんヶげつ", lcAttr = 1845, rcAttr = 1845, wcost = 2000),
+        )
+
+        val compact = MozcCompactLexicon(encodeDictionary(katakanaReadingEntries))
+        val entryList = EntryListReadingLexicon(katakanaReadingEntries)
+
+        // EntryListReadingLexicon は `いちゖげつ` をキーにするため、`いちヶげつ` では引けない。
+        // MozcCompactLexicon も同じ正規化を通すため両者の結果が一致する（ともに空）。
+        val queryKatakana = "いちヶげつ"
+        val compactKatakana = compact.commonPrefixSearch(queryKatakana, 0)
+        val entryListKatakana = entryList.commonPrefixSearch(queryKatakana, 0)
+
+        assertMatchListEquals(entryListKatakana, compactKatakana, "カタカナ query（正規化前）")
+
+        // 正規化済み hiragana クエリでは両者ともヒットする。
+        val queryHiragana = "いちゖげつ"
+        val compactHiragana = compact.commonPrefixSearch(queryHiragana, 0)
+        val entryListHiragana = entryList.commonPrefixSearch(queryHiragana, 0)
+
+        assertMatchListEquals(entryListHiragana, compactHiragana, "hiragana query（正規化後）")
+    }
+
+    // ---- 壊れた binary の検証テスト（修正2 ロック）----
+
+    /**
+     * count が実際のエントリ数より少ない binary（末尾に余剰バイトがある）を渡すと
+     * [MozcCompactLexicon] のコンストラクタが失敗することを検証する。
+     *
+     * [MozcCompactDictionaryReader.readEntries] と同水準の壊れた binary 検出を確認する。
+     */
+    @Test
+    fun rejectsTrailingBytesAfterAllEntries() {
+        val entry = entry(surface = "以下", reading = "いか", lcAttr = 1, rcAttr = 1, wcost = 100)
+        val validBytes = encodeDictionary(listOf(entry))
+
+        // 末尾に余剰バイトを追加する（count=1 だが実際には余剰データあり）。
+        val withTrailing = validBytes + byteArrayOf(0x00, 0x01)
+
+        assertFailsWith<IllegalArgumentException>(
+            message = "余剰バイトがある binary は拒否されること",
+        ) {
+            MozcCompactLexicon(withTrailing)
+        }
+    }
+
+    /**
+     * count が実際のエントリ数より多い（データが途中で切れた）binary を渡すと
+     * [MozcCompactLexicon] のコンストラクタが失敗することを検証する。
+     */
+    @Test
+    fun rejectsTruncatedBinary() {
+        val entry = entry(surface = "以下", reading = "いか", lcAttr = 1, rcAttr = 1, wcost = 100)
+        val validBytes = encodeDictionary(listOf(entry))
+
+        // 末尾 3 バイトを切り落として truncate する。
+        val truncated = validBytes.copyOf(validBytes.size - 3)
+
+        assertFailsWith<IllegalArgumentException>(
+            message = "途中で終端した binary は拒否されること",
+        ) {
+            MozcCompactLexicon(truncated)
+        }
+    }
+
     // ---- homophone streaming parity テスト ----
 
     @Test
@@ -178,6 +259,33 @@ class MozcCompactLexiconParityTest {
 
         // ああると（surface == reading）は除外され、アアルトのみ残ること。
         assertEquals(listOf("アアルト"), streamingIndex["ああると"], "素通しエントリの除外")
+    }
+
+    /**
+     * reading にカタカナを含むエントリでも、素通し判定が classic [MozcHomophoneDictionary.buildReverseIndex]
+     * と一致することを検証する（素通し判定は **正規化前の raw reading** で行う必要がある）。
+     *
+     * 素通し判定を正規化キー（`ゖ`）と比較すると、surface=`ヶ` / reading=`ヶ` のエントリが
+     * 「surface != 正規化キー」と誤判定されて候補に残り、classic と乖離する。raw reading 比較ならば
+     * 正しく素通しとして除外される。
+     */
+    @Test
+    fun streamingHomophoneUsesRawReadingForKatakanaPassthrough() {
+        val katakanaEntries = listOf(
+            entry(surface = "ヶ", reading = "ヶ", lcAttr = 1, rcAttr = 1, wcost = 100),
+            entry(surface = "箇", reading = "ヶ", lcAttr = 1, rcAttr = 1, wcost = 200),
+        )
+
+        val compact = MozcCompactLexicon(encodeDictionary(katakanaEntries))
+
+        val streamingIndex = compact.buildStreamingHomophoneIndex()
+        val classicIndex = MozcHomophoneDictionary.buildReverseIndex(katakanaEntries)
+
+        assertEquals(classicIndex.keys.sorted(), streamingIndex.keys.sorted(), "カタカナ reading のキー集合 parity")
+
+        // 正規化キー `ゖ` 配下は素通し `ヶ` を除外し `箇` のみ残ること。
+        assertEquals(listOf("箇"), streamingIndex["ゖ"], "raw reading 基準の素通し除外")
+        assertEquals(classicIndex["ゖ"], streamingIndex["ゖ"], "key=ゖ の候補リスト parity")
     }
 
     // ---- ヘルパー ----
