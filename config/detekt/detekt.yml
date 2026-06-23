@@ -76,6 +76,11 @@ potential-bugs:
 formatting:
   active: true
   autoCorrect: true
+  # detekt 1.23.8 同梱 ktlint の Indentation 規則が :core:ime androidMain の本ファイルに対してのみ、
+  # 4-space インデントを誤って「1-space であるべき」と誤検知し autoCorrect が全階層を 1-space に潰す
+  # 既知の不具合がある（同一スタイルの macosArm64 actual・他モジュールの androidMain は通過する）。
+  # 4-space が正しいため、本ファイルだけ formatting (ktlint) ルールセットの対象外にする。
+  excludes: ['**/androidMain/kotlin/me/matsumo/romaflow/core/ime/MozcBundleLoader.android.kt']
   MaximumLineLength:
     active: false
   ArgumentListWrapping:
