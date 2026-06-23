@@ -159,7 +159,7 @@ class MozcCompactLexiconParityTest {
      * reading にカタカナ（`ヶ`）が混じるエントリで、[MozcCompactLexicon] と [EntryListReadingLexicon] の
      * commonPrefixSearch 結果が完全一致することを検証する。
      *
-     * [EntryListReadingLexicon.buildReverseIndex] は [IpadicReadingLexicon.katakanaToHiragana] で
+     * [EntryListReadingLexicon.buildReverseIndex] は [ReadingNormalizer.katakanaToHiragana] で
      * reading を正規化してから index 化する。[MozcCompactLexicon] も同一正規化を通さないと、
      * `ヶ`（U+30F6）→ `ゖ`（U+3096）への変換が行われず parity が崩れる。
      * 実 Mozc dict に存在する `ヶ` 含む reading（例: 三ヶ月 → さんヶげつ のようなケース）を模したテスト。

@@ -3,8 +3,8 @@ package me.matsumo.romaflow.core.morphology
 /**
  * 任意の [LexemeEntry] 列から逆引き index を構築する汎用 [ReadingLexicon] 実装。
  *
- * [IpadicReadingLexicon] が IPADIC の sys.dic に固定なのに対し、こちらは事前に構築済みの
- * エントリ列を受け取るため、UniDic など別辞書由来のエントリでも逆引き格子を組める。
+ * Mozc などの辞書に固定されず、事前に構築済みのエントリ列を受け取るため、
+ * UniDic など別辞書由来のエントリでも逆引き格子を組める。
  * U1 の UniDic shadow 比較で使用する。index 構築はコンストラクタで即時実行されるため、
  * 大規模辞書では呼び出し側がインスタンス生成のタイミングを制御すること。
  */
@@ -35,7 +35,7 @@ class EntryListReadingLexicon(
             val mutableMap = mutableMapOf<String, MutableList<LexemeEntry>>()
 
             for (entry in entries) {
-                val key = IpadicReadingLexicon.katakanaToHiragana(entry.reading)
+                val key = ReadingNormalizer.katakanaToHiragana(entry.reading)
 
                 mutableMap.getOrPut(key) { mutableListOf() }.add(entry)
             }
