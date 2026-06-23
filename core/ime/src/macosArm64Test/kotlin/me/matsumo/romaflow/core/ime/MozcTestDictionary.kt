@@ -32,39 +32,47 @@ object MozcTestDictionary {
 
     /** 素の [MozcCompactLexicon]（fallback なし）。本番 factory が engine へ渡すものと同じ素材。 */
     val readingLexicon: ReadingLexicon by lazy {
-        MozcCompactLexicon(readFileBytes(MozcGeneratedDictionaryPaths.DICTIONARY_BINARY_PATH))
+        MozcCompactLexicon(readMozcBinaryFile(MozcGeneratedDictionaryPaths.DICTIONARY_BINARY_PATH))
     }
 
     /** Mozc matrix（`mozc_matrix.bin`）由来の連接コスト provider。 */
     val costProvider: ConnectionCostProvider by lazy {
-        MozcCompactDictionaryReader.readConnectionCostProvider(readFileBytes(MozcGeneratedDictionaryPaths.MATRIX_BINARY_PATH))
+        MozcCompactDictionaryReader.readConnectionCostProvider(readMozcBinaryFile(MozcGeneratedDictionaryPaths.MATRIX_BINARY_PATH))
     }
 
     /** OOV fallback（[LiteralContextIds.Mozc]）付きの composite 格子。 */
     val compositeLexicon: ReadingLexicon by lazy {
         buildReadingLexiconWithFallback(readingLexicon, LiteralContextIds.Mozc)
     }
+}
 
-    private fun readFileBytes(path: String): ByteArray {
-        val file = fopen(path, "rb") ?: error("ファイルを開けませんでした: $path")
+/**
+ * macosArm64Test 共通: [path] の生成済み Mozc binary を posix で全読みして返す。
+ *
+ * 生成物（数十 MB）を一括ロードするテスト専用ヘルパー。複数の integration テストが同一処理を
+ * 重複させていたため共有する。production の [MozcBundleLoader] は別 source set（macosArm64Main・
+ * bundle resource 経由）の独立実装で、本ヘルパーとは統合しない。
+ */
+@OptIn(ExperimentalForeignApi::class)
+internal fun readMozcBinaryFile(path: String): ByteArray {
+    val file = fopen(path, "rb") ?: error("ファイルを開けませんでした: $path")
 
-        try {
-            fseek(file, 0, SEEK_END)
-            val byteCount = ftell(file)
-            rewind(file)
+    try {
+        fseek(file, 0, SEEK_END)
+        val byteCount = ftell(file)
+        rewind(file)
 
-            require(byteCount > 0) { "ファイルが空、またはサイズを取得できません: $path" }
+        require(byteCount > 0) { "ファイルが空、またはサイズを取得できません: $path" }
 
-            val buffer = ByteArray(byteCount.toInt())
+        val buffer = ByteArray(byteCount.toInt())
 
-            buffer.usePinned { pinned ->
-                val readCount = fread(pinned.addressOf(0), 1.convert(), byteCount.convert(), file)
-                require(readCount.toLong() == byteCount) { "読み込みが不完全です: $path ($readCount/$byteCount)" }
-            }
-
-            return buffer
-        } finally {
-            fclose(file)
+        buffer.usePinned { pinned ->
+            val readCount = fread(pinned.addressOf(0), 1.convert(), byteCount.convert(), file)
+            require(readCount.toLong() == byteCount) { "読み込みが不完全です: $path ($readCount/$byteCount)" }
         }
+
+        return buffer
+    } finally {
+        fclose(file)
     }
 }
