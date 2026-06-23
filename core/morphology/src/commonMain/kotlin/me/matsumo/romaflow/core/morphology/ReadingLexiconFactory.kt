@@ -9,8 +9,8 @@ package me.matsumo.romaflow.core.morphology
  * shadow エンジン（A-3）が `:core:ime` から呼び出すために公開する。
  * [CompositeLexicon] と [LiteralLexicon] 自体は `internal` のまま変更しない。
  *
- * [literalContextIds] で fallback arc の連接 ID を辞書（IPADIC / Mozc）に合わせて差し替える。
- * 既定は [LiteralContextIds.Ipadic] のためライブ挙動は不変。
+ * [literalContextIds] で fallback arc の連接 ID を辞書（Mozc 等）に合わせて差し替える。
+ * 既定は [LiteralContextIds.Ipadic]。Mozc 本番経路では呼び出し側が [LiteralContextIds.Mozc] を渡す。
  */
 fun buildReadingLexiconWithFallback(
     primary: ReadingLexicon,
@@ -21,16 +21,6 @@ fun buildReadingLexiconWithFallback(
         fallback = LiteralLexicon(literalContextIds),
     )
 }
-
-/**
- * プラットフォームに応じた連接コスト行列をロードして [ConnectionCostProvider] を返す public factory。
- *
- * macosArm64 は momiji IPADIC の base64 埋め込み行列、Android/JVM は classpath の
- * `mecab-ipadic/matrix.bin` をそれぞれ `internal expect` の [loadConnectionMatrix] で取得する。
- * ロードはコストが高いため、呼び出し側（[RomaFlowEngine] 等）は `by lazy` でキャッシュすること。
- * `:core:morphology` は Swift Export を持たないため、この関数は Swift 側に出ない。
- */
-fun defaultConnectionCostProvider(): ConnectionCostProvider = loadConnectionMatrix()
 
 /**
  * [entry] が [LiteralLexicon] 由来の fallback arc かどうかを厳密に判定する。
