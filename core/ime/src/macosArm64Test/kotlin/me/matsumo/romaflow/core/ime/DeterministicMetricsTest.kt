@@ -1,10 +1,9 @@
 package me.matsumo.romaflow.core.ime
 
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
+import me.matsumo.romaflow.core.morphology.LiteralContextIds
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
-import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
+import me.matsumo.romaflow.core.morphology.ReadingLexicon
 import me.matsumo.romaflow.core.morphology.isLiteralFallbackArc
 import kotlin.math.roundToInt
 import kotlin.test.Test
@@ -39,8 +38,8 @@ class DeterministicMetricsTest {
      */
     @Test
     fun normalCategoryDeterministicMetrics() {
-        val lexicon = IpadicReadingLexicon()
-        val costProvider = MomijiConnectionCostProvider.load()
+        val lexicon = MozcTestDictionary.readingLexicon
+        val costProvider = MozcTestDictionary.costProvider
         val corpus = EvaluationCorpus.normal
 
         val result = measureCoverageRecallTop1(
@@ -76,8 +75,8 @@ class DeterministicMetricsTest {
      */
     @Test
     fun homophoneCategoryDeterministicMetrics() {
-        val lexicon = IpadicReadingLexicon()
-        val costProvider = MomijiConnectionCostProvider.load()
+        val lexicon = MozcTestDictionary.readingLexicon
+        val costProvider = MozcTestDictionary.costProvider
         val corpus = EvaluationCorpus.homophone
 
         val result = measureCoverageRecallTop1(
@@ -111,8 +110,8 @@ class DeterministicMetricsTest {
      */
     @Test
     fun boundaryChangeCategoryDeterministicMetrics() {
-        val lexicon = IpadicReadingLexicon()
-        val costProvider = MomijiConnectionCostProvider.load()
+        val lexicon = MozcTestDictionary.readingLexicon
+        val costProvider = MozcTestDictionary.costProvider
         val corpus = EvaluationCorpus.boundaryChange
 
         val entriesWithSegmentation = corpus.filter { it.expectedSegmentation.isNotEmpty() }
@@ -155,15 +154,14 @@ class DeterministicMetricsTest {
     /**
      * PROPER_NOUN カテゴリの OOV / literal fallback 率をレポートする。
      *
-     * IPADIC に収録されている固有名詞と OOV（辞書外語）の両方を含む corpus で、
+     * Mozc に収録されている固有名詞と OOV（辞書外語）の両方を含む corpus で、
      * [isLiteralFallbackArc] が真となる arc に依存した top-1 経路の割合を計測する。
      * assert は設けず、レポートのみ（PROPER_NOUN の OOV 率は gold 設計に依存するため）。
      */
     @Test
     fun properNounCategoryOovFallbackRate() {
-        val ipaDicLexicon = IpadicReadingLexicon()
-        val costProvider = MomijiConnectionCostProvider.load()
-        val compositeLexicon = buildReadingLexiconWithFallback(ipaDicLexicon)
+        val costProvider = MozcTestDictionary.costProvider
+        val compositeLexicon = MozcTestDictionary.compositeLexicon
         val corpus = EvaluationCorpus.properNoun
 
         var literalFallbackCount = 0
@@ -179,7 +177,7 @@ class DeterministicMetricsTest {
             )
 
             val top1Path = paths.firstOrNull()?.second ?: emptyList()
-            val hasLiteralArc = top1Path.any { isLiteralFallbackArc(it) }
+            val hasLiteralArc = top1Path.any { isLiteralFallbackArc(it, LiteralContextIds.Mozc) }
 
             if (hasLiteralArc) literalFallbackCount++
 
@@ -203,9 +201,8 @@ class DeterministicMetricsTest {
      */
     @Test
     fun asciiDigitSymbolCategoryLiteralFallbackRate() {
-        val ipaDicLexicon = IpadicReadingLexicon()
-        val costProvider = MomijiConnectionCostProvider.load()
-        val compositeLexicon = buildReadingLexiconWithFallback(ipaDicLexicon)
+        val costProvider = MozcTestDictionary.costProvider
+        val compositeLexicon = MozcTestDictionary.compositeLexicon
         val corpus = EvaluationCorpus.asciiDigitSymbol
 
         var literalFallbackCount = 0
@@ -221,7 +218,7 @@ class DeterministicMetricsTest {
             )
 
             val top1Path = paths.firstOrNull()?.second ?: emptyList()
-            val hasLiteralArc = top1Path.any { isLiteralFallbackArc(it) }
+            val hasLiteralArc = top1Path.any { isLiteralFallbackArc(it, LiteralContextIds.Mozc) }
 
             if (hasLiteralArc) literalFallbackCount++
 
@@ -251,9 +248,9 @@ class DeterministicMetricsTest {
      */
     @Test
     fun allCategoriesSummaryReport() {
-        val lexicon = IpadicReadingLexicon()
-        val costProvider = MomijiConnectionCostProvider.load()
-        val compositeLexicon = buildReadingLexiconWithFallback(lexicon)
+        val lexicon = MozcTestDictionary.readingLexicon
+        val costProvider = MozcTestDictionary.costProvider
+        val compositeLexicon = MozcTestDictionary.compositeLexicon
 
         println("=== A-0 全カテゴリ決定論指標サマリ ===")
         println("corpus 合計: ${EvaluationCorpus.all.size} 件")
@@ -292,7 +289,7 @@ class DeterministicMetricsTest {
                 )
                 val top1Path = paths.firstOrNull()?.second ?: emptyList()
 
-                top1Path.any { isLiteralFallbackArc(it) }
+                top1Path.any { isLiteralFallbackArc(it, LiteralContextIds.Mozc) }
             }
 
             val fallbackRate = if (corpus.isEmpty()) 0.0 else fallbackCount.toDouble() / corpus.size
@@ -330,7 +327,7 @@ class DeterministicMetricsTest {
      */
     private fun measureCoverageRecallTop1(
         corpus: List<CorpusEntry>,
-        lexicon: IpadicReadingLexicon,
+        lexicon: ReadingLexicon,
         costProvider: ConnectionCostProvider,
         nBestCount: Int,
         categoryLabel: String,
@@ -396,7 +393,7 @@ class DeterministicMetricsTest {
     private fun checkSegmentationSurfaceCoverage(
         reading: String,
         segmentation: List<String>,
-        lexicon: IpadicReadingLexicon,
+        lexicon: ReadingLexicon,
         costProvider: ConnectionCostProvider,
     ): Boolean {
         val surface = segmentation.joinToString("")

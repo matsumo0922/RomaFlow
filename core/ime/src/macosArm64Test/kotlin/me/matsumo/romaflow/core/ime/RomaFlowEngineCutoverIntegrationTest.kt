@@ -1,8 +1,6 @@
 package me.matsumo.romaflow.core.ime
 
 import kotlinx.coroutines.runBlocking
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,7 +9,7 @@ import kotlin.test.assertTrue
 /**
  * A-rerank cutover の結合テスト（macosArm64・実辞書使用）。
  *
- * IpadicReadingLexicon と MomijiConnectionCostProvider を使い、正常 cutover パス
+ * Mozc compact lexicon と Mozc 連接コスト行列（[MozcTestDictionary]）を使い、正常 cutover パス
  * （verified path 経由での segment 生成）と rerank 失敗時の Viterbi 1位 fallback を確認する。
  *
  * テストケース一覧:
@@ -27,8 +25,8 @@ import kotlin.test.assertTrue
 @Suppress("FunctionNaming")
 class RomaFlowEngineCutoverIntegrationTest {
 
-    private val lexicon by lazy { IpadicReadingLexicon() }
-    private val costProvider by lazy { MomijiConnectionCostProvider.load() }
+    private val lexicon by lazy { MozcTestDictionary.readingLexicon }
+    private val costProvider by lazy { MozcTestDictionary.costProvider }
 
     @Test
     fun cutover_verifiedPath_tenki() = runBlocking {
@@ -80,7 +78,7 @@ class RomaFlowEngineCutoverIntegrationTest {
 
         // segment の reading が readingInput（"てんき" = 3文字）全体を覆うこと。
         // verified path では lexeme の reading 長で切り出した ひらがな reading が格納される。
-        // "てんき" は IPADIC で 1 lexeme（天気）として処理されるため reading は "てんき"。
+        // "てんき" は Mozc 格子で 1 lexeme（天気）として処理されるため reading は "てんき"。
         assertEquals("てんき", engine.segmentReading(0))
     }
 
@@ -89,7 +87,7 @@ class RomaFlowEngineCutoverIntegrationTest {
         // A-rerank 設計: rerank() が -1 を返した場合（失敗）、格子の Viterbi 1位（rank-0）の表層を採用する。
         //
         // FixedConversionProvider は rerank() で -1 を返す（convert() の固定値は使われない）。
-        // IPADIC + MomijiConnectionCostProvider を使った格子の rank-0 は "天気" になるため、
+        // Mozc lexicon + Mozc matrix を使った格子の rank-0 は "天気" になるため、
         // rerank 失敗でも "天気" に変換されることを確認する。
         val provider = FixedConversionProvider("XYZ") // convert() の固定値は参照されない
         val engine = RomaFlowEngine(
@@ -118,7 +116,7 @@ class RomaFlowEngineCutoverIntegrationTest {
         // A-rerank 設計: rerank() が常に -1 を返す provider でも Viterbi 1位（rank-0）で変換が成功すること。
         //
         // AlwaysFailRerankProvider は rerank() で常に -1 を返す。
-        // IPADIC + MomijiConnectionCostProvider の格子 rank-0 は "天気" になるため、
+        // Mozc lexicon + Mozc matrix の格子 rank-0 は "天気" になるため、
         // rerank 失敗でも "天気" に変換されることを確認する。
         val engine = RomaFlowEngine(
             conversionProvider = AlwaysFailRerankProvider,

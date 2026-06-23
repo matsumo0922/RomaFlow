@@ -15,12 +15,10 @@ import me.matsumo.romaflow.core.ime.shadow.ResolutionProposal
 import me.matsumo.romaflow.core.ime.shadow.ResolutionRequest
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.HomophoneDictionary
-import me.matsumo.romaflow.core.morphology.IpadicHomophoneDictionary
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
 import me.matsumo.romaflow.core.morphology.LexemeEntry
+import me.matsumo.romaflow.core.morphology.LiteralContextIds
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
 import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
-import me.matsumo.romaflow.core.morphology.defaultConnectionCostProvider
 
 /**
  * rerank の動作モード。
@@ -61,8 +59,9 @@ internal enum class RerankMode {
  *
  * ## A-5 cutover: lexicon / costProvider 注入
  * テスト注入用に internal constructor で [readingLexiconFactory] と [connectionCostProviderFactory] を受け取る。
- * public constructor は本番向けの [IpadicReadingLexicon] と [defaultConnectionCostProvider] を使う。
- * matrix ロード（重い）は初回 [convert] まで遅延するため、engine 構築時のレイテンシを避ける。
+ * public constructor は本番向けに同梱 Mozc binary（[MozcDictionaryFactory]）から lexicon / costProvider /
+ * homophone を構築する。dict / matrix ロード（重い）は初回 [convert] まで遅延するため、engine 構築時の
+ * レイテンシを避ける。
  * factory はラムダとして渡され、[readingLexicon] / [connectionCostProvider] の by lazy フィールドで
  * 初回 convert() 時に評価される。これにより engine 構築時点ではいかなるロードも走らない。
  *
@@ -75,8 +74,8 @@ class RomaFlowEngine internal constructor(
     private val segmenter: Segmenter,
     private val aligner: ReadingAligner,
     private val homophoneDictionary: HomophoneDictionary = EmptyHomophoneDictionary,
-    private val readingLexiconFactory: () -> ReadingLexicon = ::IpadicReadingLexicon,
-    private val connectionCostProviderFactory: () -> ConnectionCostProvider = ::defaultConnectionCostProvider,
+    private val readingLexiconFactory: () -> ReadingLexicon = MozcDictionaryFactory::createReadingLexicon,
+    private val connectionCostProviderFactory: () -> ConnectionCostProvider = MozcDictionaryFactory::createConnectionCostProvider,
     /** rerank の動作モード。既定は [RerankMode.FactorizedSurface]（open surface proposal + 格子検証）。 */
     private val rerankMode: RerankMode = RerankMode.FactorizedSurface,
 ) {
@@ -120,8 +119,11 @@ class RomaFlowEngine internal constructor(
 
     // OOV fallback 付き格子（composite）・proposalApplier・legacyResolver は初回 convert() まで遅延して構築する。
     // readingLexicon / connectionCostProvider も lazy なので、こちらの初期化も自動的に遅延する。
+    // literal arc の連接 ID は Mozc の POS 空間に合わせる（cutover で本番辞書が Mozc になったため）。
     // legacyResolver は stateless なので 1 インスタンスを再利用する。
-    private val compositeLexicon: ReadingLexicon by lazy { buildReadingLexiconWithFallback(readingLexicon) }
+    private val compositeLexicon: ReadingLexicon by lazy {
+        buildReadingLexiconWithFallback(readingLexicon, LiteralContextIds.Mozc)
+    }
 
     private val proposalApplier: ProposalApplier by lazy {
         ProposalApplier(
@@ -162,17 +164,18 @@ class RomaFlowEngine internal constructor(
     }
 
     /**
-     * Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner・IPADIC 辞書を使う constructor。
+     * Swift Export / 本番経路向けに既定の AI provider・momiji segmenter・DP aligner・同梱 Mozc 辞書を使う constructor。
      *
-     * lexicon / costProvider は internal constructor のデフォルト factory（`::IpadicReadingLexicon` /
-     * `::defaultConnectionCostProvider`）が適用されるため省略する。
-     * いずれも by lazy フィールドで初回 convert() まで遅延生成されるため、engine 構築コストはゼロ。
+     * lexicon / costProvider は internal constructor のデフォルト factory（[MozcDictionaryFactory]）が
+     * 適用されるため省略する。homophone も同梱 Mozc binary から streaming index で構築する。
+     * いずれも by lazy フィールド・[HomophoneDictionary.ensureReady] で初回 convert() / call2 まで
+     * 遅延生成されるため、engine 構築コストはゼロ。
      */
     constructor() : this(
         conversionProvider = defaultConversionProvider(),
         segmenter = MomijiSegmenter(),
         aligner = DpReadingAligner(),
-        homophoneDictionary = IpadicHomophoneDictionary(),
+        homophoneDictionary = MozcDictionaryFactory.createHomophoneDictionary(),
     )
 
     fun smokeText(): String {

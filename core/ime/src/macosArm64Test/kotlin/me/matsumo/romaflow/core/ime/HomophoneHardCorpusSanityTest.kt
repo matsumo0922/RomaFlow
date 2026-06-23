@@ -1,13 +1,11 @@
 package me.matsumo.romaflow.core.ime
 
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 
 /**
- * HOMOPHONE_HARD corpus の gold が IPADIC 格子上で到達可能であることを保証するサニティテスト。
+ * HOMOPHONE_HARD corpus の gold が Mozc 格子上で到達可能であることを保証するサニティテスト。
  *
  * [ReadingLatticeDecoder.findMinCostPathForSurface] で各 gold の (reading, surface) を検証し、
  * 非 null（到達可能）であることを assert する。
@@ -17,16 +15,16 @@ import kotlin.test.assertNotNull
  */
 class HomophoneHardCorpusSanityTest {
 
-    private val lexicon by lazy { IpadicReadingLexicon() }
-    private val costProvider by lazy { MomijiConnectionCostProvider.load() }
+    private val lexicon by lazy { MozcTestDictionary.compositeLexicon }
+    private val costProvider by lazy { MozcTestDictionary.costProvider }
 
     /**
-     * HOMOPHONE_HARD の全 gold が IPADIC で格子到達可能であることを assert する。
+     * HOMOPHONE_HARD の全 gold が Mozc で格子到達可能であることを assert する。
      *
      * findMinCostPathForSurface が非 null = 格子内に (reading, surface) を実現する path が存在する。
      */
     @Test
-    fun allHomophoneHardGoldsAreReachableInIpadic() {
+    fun allHomophoneHardGoldsAreReachableInMozc() {
         val entries = EvaluationCorpus.homophoneHard
 
         println("=== HOMOPHONE_HARD corpus sanity check: ${entries.size} entries ===")
@@ -45,11 +43,11 @@ class HomophoneHardCorpusSanityTest {
 
             assertNotNull(
                 actual = path,
-                message = "HOMOPHONE_HARD gold が IPADIC で格子到達不能: " +
+                message = "HOMOPHONE_HARD gold が Mozc で格子到達不能: " +
                     "reading=${entry.reading} gold=${entry.expectedSurface}",
             )
         }
 
-        println("=== All ${entries.size} HOMOPHONE_HARD golds are reachable in IPADIC ===")
+        println("=== All ${entries.size} HOMOPHONE_HARD golds are reachable in Mozc ===")
     }
 }

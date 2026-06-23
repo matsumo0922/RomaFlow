@@ -1,12 +1,9 @@
 package me.matsumo.romaflow.core.ime
 
 import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
-import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.usePinned
 import me.matsumo.romaflow.core.ime.generated.MozcGeneratedDictionaryPaths
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.EntryListReadingLexicon
@@ -18,14 +15,7 @@ import me.matsumo.romaflow.core.morphology.ReadingLexicon
 import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
 import me.matsumo.romaflow.core.morphology.isLiteralFallbackArc
 import platform.posix.RUSAGE_SELF
-import platform.posix.SEEK_END
-import platform.posix.fclose
-import platform.posix.fopen
-import platform.posix.fread
-import platform.posix.fseek
-import platform.posix.ftell
 import platform.posix.getrusage
-import platform.posix.rewind
 import platform.posix.rusage
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -54,8 +44,8 @@ class MozcDictionaryMetricsTest {
     fun reportsDeterministicMozcMetrics() {
         val baselineMaxResidentBytes = currentMaxResidentBytes()
 
-        val dictBytes = readFileBytes(MozcGeneratedDictionaryPaths.DICTIONARY_BINARY_PATH)
-        val matrixBytes = readFileBytes(MozcGeneratedDictionaryPaths.MATRIX_BINARY_PATH)
+        val dictBytes = readMozcBinaryFile(MozcGeneratedDictionaryPaths.DICTIONARY_BINARY_PATH)
+        val matrixBytes = readMozcBinaryFile(MozcGeneratedDictionaryPaths.MATRIX_BINARY_PATH)
 
         val entries = MozcCompactDictionaryReader.readEntries(dictBytes)
         val costProvider = MozcCompactDictionaryReader.readConnectionCostProvider(matrixBytes)
@@ -226,30 +216,6 @@ class MozcDictionaryMetricsTest {
             getrusage(RUSAGE_SELF, usage.ptr)
 
             usage.ru_maxrss.toLong()
-        }
-    }
-
-    @OptIn(ExperimentalForeignApi::class)
-    private fun readFileBytes(path: String): ByteArray {
-        val file = fopen(path, "rb") ?: error("ファイルを開けませんでした: $path")
-
-        try {
-            fseek(file, 0, SEEK_END)
-            val byteCount = ftell(file)
-            rewind(file)
-
-            require(byteCount > 0) { "ファイルが空、またはサイズを取得できません: $path" }
-
-            val buffer = ByteArray(byteCount.toInt())
-
-            buffer.usePinned { pinned ->
-                val readCount = fread(pinned.addressOf(0), 1.convert(), byteCount.convert(), file)
-                require(readCount.toLong() == byteCount) { "読み込みが不完全です: $path ($readCount/$byteCount)" }
-            }
-
-            return buffer
-        } finally {
-            fclose(file)
         }
     }
 

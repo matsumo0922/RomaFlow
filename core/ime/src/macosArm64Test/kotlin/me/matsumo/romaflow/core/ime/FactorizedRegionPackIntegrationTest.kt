@@ -6,8 +6,6 @@ import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest
 import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResolver
 import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult
 import me.matsumo.romaflow.core.ime.shadow.ResolutionRequest
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -22,8 +20,8 @@ import kotlin.test.assertTrue
 @Suppress("FunctionNaming")
 class FactorizedRegionPackIntegrationTest {
 
-    private val lexicon by lazy { IpadicReadingLexicon() }
-    private val costProvider by lazy { MomijiConnectionCostProvider.load() }
+    private val lexicon by lazy { MozcTestDictionary.readingLexicon }
+    private val costProvider by lazy { MozcTestDictionary.costProvider }
 
     /**
      * `べんきょうしてせいかをあげた` の region pack を検証する。
@@ -78,25 +76,30 @@ class FactorizedRegionPackIntegrationTest {
     }
 
     /**
-     * カタカナ baseline の content 語が region 化され、正しい漢字代替が候補に出ることを検証する。
+     * 曖昧な content 語が region 化され、正しい漢字代替が候補に出ることを検証する。
      *
-     * 辞書 Viterbi rank-0 が誤って片仮名になる語（いか→イカ、かな→カナ）は、純ひらがなでないため region 化され、
-     * 正解候補（以下 / 仮名）が pack に入る。これにより「カタカナで固定されて正解を選べない」過去の不具合
-     * （いかのしりょうによれば→イカの…、かんじかなまじりぶん→…カナ…）を防ぐ。
-     * なお最終的にどれが選ばれるかは LLM 依存（本テストは候補被覆のみを決定論で保証する）。
+     * 「いか」「かんじ」「ぶん」のように漢字代替が複数ある content 語は曖昧 span として region 化され、
+     * 正解候補（以下 / 漢字 / 文）が pack に入ることで LLM が表層を選べるようにする。
+     * 最終的にどれが選ばれるかは LLM 依存（本テストは候補被覆のみを決定論で保証する）。
+     *
+     * NOTE（U2b cutover）: 旧 IPADIC は rank-0 baseline が「いか→イカ」「かな→カナ」と誤って片仮名化する
+     * 不具合があり、その片仮名 span が region 化される挙動を検証していた。Mozc 連接コストでは
+     * baseline 分割が変わり、「かな」は固定 run「かなまじり」に吸収されて独立 region にならない一方、
+     * 「いか」は `[以下, イカ, 医科, いか, 如何]` の複数候補を持つ region として正しく提示される。
+     * したがって本テストは Mozc baseline の実分割に合わせ、region 化される content 語の候補被覆を検証する。
      */
     @Test
-    fun katakanaBaselineContentWords_areRegionizedWithKanjiAlternatives() = runBlocking {
+    fun ambiguousContentWords_areRegionizedWithKanjiAlternatives() = runBlocking {
         val recordingForIka = RecordingRegionPackProvider()
         FactorizedRerankResolver(recordingForIka, lexicon, costProvider)
             .propose(buildRequest("いかのしりょうによれば"))
         val ikaRequest = assertNotNull(recordingForIka.lastRequest, "content 語の曖昧 span があり request が作られること")
         printRegionPack(ikaRequest)
 
-        // ① 検証: カタカナ baseline の「いか」が確定部に固定されず region 化されること（イカ ロック解消）。
+        // ① 検証: 「いか」が確定部に固定されず region 化され、複数の漢字代替が提示されること。
         // 注: 正解「以下」が最大6件に入るかは候補ランキング（wcost）依存で、本テストでは保証しない（既知の限界 ②）。
         val ikaRegion = ikaRequest.regions.firstOrNull { it.reading == "いか" }
-        assertNotNull(ikaRegion, "カタカナ baseline の「いか」が region 化されること（読み: ${ikaRequest.regions.map { it.reading }}）")
+        assertNotNull(ikaRegion, "「いか」が region 化されること（読み: ${ikaRequest.regions.map { it.reading }}）")
         assertTrue(
             ikaRegion.options.size >= 2,
             "いか region に複数候補が提示されること（実際: ${ikaRegion.options.map { it.surface }}）",
@@ -108,11 +111,8 @@ class FactorizedRegionPackIntegrationTest {
         val kanjiRequest = assertNotNull(recordingForKanji.lastRequest, "request が作られること")
         printRegionPack(kanjiRequest)
 
-        val kanaRegion = kanjiRequest.regions.firstOrNull { it.reading == "かな" }
-        assertNotNull(kanaRegion, "カタカナ baseline の「かな」が region 化されること（読み: ${kanjiRequest.regions.map { it.reading }}）")
-
         val kanjiRegion = kanjiRequest.regions.firstOrNull { it.reading == "かんじ" }
-        assertNotNull(kanjiRegion, "「かんじ」が region 化されること")
+        assertNotNull(kanjiRegion, "「かんじ」が region 化されること（読み: ${kanjiRequest.regions.map { it.reading }}）")
         assertTrue(
             kanjiRegion.options.any { it.surface == "漢字" },
             "かんじ region に「漢字」が含まれること（実際: ${kanjiRegion.options.map { it.surface }}）",

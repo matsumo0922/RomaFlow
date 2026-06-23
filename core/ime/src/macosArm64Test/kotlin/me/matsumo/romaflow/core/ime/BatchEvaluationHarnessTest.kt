@@ -3,8 +3,6 @@ package me.matsumo.romaflow.core.ime
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.runBlocking
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
 import platform.posix.getenv
 import kotlin.test.Test
@@ -30,8 +28,8 @@ class BatchEvaluationHarnessTest {
     @Test
     fun a0BatchEvalViterbiCoversKnownReadingsWithExpectedTopCandidates() {
         val timeSource = TimeSource.Monotonic
-        val lexicon = IpadicReadingLexicon()
-        val costProvider = MomijiConnectionCostProvider.load()
+        val lexicon = MozcTestDictionary.readingLexicon
+        val costProvider = MozcTestDictionary.costProvider
 
         val testCases = listOf(
             "てんき" to listOf("天気", "転機"),
@@ -74,13 +72,13 @@ class BatchEvaluationHarnessTest {
     /**
      * A-0 レイテンシチェック: 辞書ロード済み状態（ウォームアップ後）での N-best 計算が 1 秒以内に完了する。
      *
-     * 初回の [IpadicReadingLexicon] 構築（逆引き index の lazy init）は重いため、
+     * 初回の Mozc 辞書構築（逆引き index の lazy init）は重いため、
      * ウォームアップ呼び出しを 1 回行った後に各 reading のレイテンシを計測する。
      */
     @Test
     fun a0LatencyCheckNBestCompletesWithin1SecondPerReadingAfterWarmup() {
-        val lexicon = IpadicReadingLexicon()
-        val costProvider = MomijiConnectionCostProvider.load()
+        val lexicon = MozcTestDictionary.readingLexicon
+        val costProvider = MozcTestDictionary.costProvider
         val timeSource = TimeSource.Monotonic
 
         // 逆引き index の lazy init をここで起動して完了させる（ウォームアップ）

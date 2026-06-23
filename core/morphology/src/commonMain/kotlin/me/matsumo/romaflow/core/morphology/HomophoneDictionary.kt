@@ -3,8 +3,8 @@ package me.matsumo.romaflow.core.morphology
 /**
  * 読み（ひらがな）から同音異義の表層候補を引く逆引き辞書の境界。
  *
- * engine（後続タスク）はこの interface に依存し、本番実装 [IpadicHomophoneDictionary] と
- * テスト用の fake を差し替えられるようにする。具体的な辞書ソース（IPADIC か否か）は
+ * engine はこの interface に依存し、本番実装 [MozcHomophoneDictionary] と
+ * テスト用の fake を差し替えられるようにする。具体的な辞書ソース（Mozc か否か）は
  * 利用側に漏らさない。
  */
 interface HomophoneDictionary {

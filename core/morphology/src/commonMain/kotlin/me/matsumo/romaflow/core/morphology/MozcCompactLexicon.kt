@@ -8,7 +8,7 @@ package me.matsumo.romaflow.core.morphology
  *
  * 構築時に 1 パスで以下のインデックスを作成する:
  * - [entryOffsets]: 各エントリの先頭バイト offset（[dictBytes] 内の絶対位置）。
- * - [normalizedReadingPool]: 各エントリの [IpadicReadingLexicon.katakanaToHiragana] 正規化済み
+ * - [normalizedReadingPool]: 各エントリの [ReadingNormalizer.katakanaToHiragana] 正規化済み
  *   reading を連結した ByteArray。[EntryListReadingLexicon.buildReverseIndex] と同じ正規化を通す
  *   ことで、カタカナ混じり reading（例 `ヶ`→`ゖ`）でも parity が保たれる。
  * - [normalizedReadingStart] / [normalizedReadingLen]: pool 上の各エントリの reading バイト範囲。
@@ -18,7 +18,7 @@ package me.matsumo.romaflow.core.morphology
  * その場で decode して [LexemeMatch] を返す（LexemeEntry は呼び出し毎の短命オブジェクト）。
  *
  * ## parity 保証
- * - 正規化 reading は [IpadicReadingLexicon.katakanaToHiragana] を通すため、
+ * - 正規化 reading は [ReadingNormalizer.katakanaToHiragana] を通すため、
  *   [EntryListReadingLexicon.buildReverseIndex] の key 生成と完全一致する。
  * - `sortedOrder` のソート順（正規化 reading 昇順 → wcost 昇順・stable）は
  *   [EntryListReadingLexicon] の `buildReverseIndex`（`sortedBy { wcost }`・stable）と等価。
@@ -46,7 +46,7 @@ class MozcCompactLexicon(dictBytes: ByteArray) : ReadingLexicon {
     private val entryOffsets: IntArray
 
     /**
-     * 各エントリの [IpadicReadingLexicon.katakanaToHiragana] 正規化済み reading を連結した ByteArray。
+     * 各エントリの [ReadingNormalizer.katakanaToHiragana] 正規化済み reading を連結した ByteArray。
      *
      * [EntryListReadingLexicon] と同一の正規化を通すことで、カタカナ混じり reading（例 `ヶ`→`ゖ`）でも
      * parity が保たれる。読み合計バイト数は ~10MB 程度。
@@ -215,7 +215,7 @@ class MozcCompactLexicon(dictBytes: ByteArray) : ReadingLexicon {
      *
      * [sortedOrder] は正規化 reading 昇順でソート済みのため、連続する同 readingKey を 1 パスで
      * グループ化できる（中間 Map<String, List<LexemeEntry>> も LexemeEntry の全 List も作らない）。
-     * カタカナ reading も [IpadicReadingLexicon.katakanaToHiragana] 正規化済みのため非連続にならない。
+     * カタカナ reading も [ReadingNormalizer.katakanaToHiragana] 正規化済みのため非連続にならない。
      * 各グループの表層形を wcost 昇順・distinct・MAX_CANDIDATES_PER_READING 上限で収集する。
      *
      * 返す index のキーはひらがな正規化済み。表層 = 読みの素通しエントリは除外する。
@@ -339,7 +339,7 @@ class MozcCompactLexicon(dictBytes: ByteArray) : ReadingLexicon {
          *
          * 大半の reading は純 hiragana で正規化不要なため、カタカナを含まなければ raw バイトをそのまま
          * コピーする（1.29M 件の transient String alloc を避け、構築の GC 圧を抑える）。カタカナを含む稀な
-         * ケースのみ [IpadicReadingLexicon.katakanaToHiragana] で正規化する（共有ロジックを再利用）。
+         * ケースのみ [ReadingNormalizer.katakanaToHiragana] で正規化する（共有ロジックを再利用）。
          */
         private fun appendNormalizedReading(
             pool: ByteAccumulator,
@@ -354,7 +354,7 @@ class MozcCompactLexicon(dictBytes: ByteArray) : ReadingLexicon {
             }
 
             val rawReading = dictBytes.decodeToString(readStart, readStart + readLen)
-            val normalizedBytes = IpadicReadingLexicon.katakanaToHiragana(rawReading).encodeToByteArray()
+            val normalizedBytes = ReadingNormalizer.katakanaToHiragana(rawReading).encodeToByteArray()
 
             pool.append(normalizedBytes)
 

@@ -26,10 +26,6 @@ kotlin {
             implementation(kotlin("test"))
         }
 
-        macosArm64Main.dependencies {
-            implementation(libs.momiji.ipadic.code)
-        }
-
         macosArm64Test.dependencies {
             implementation(kotlin("test"))
         }

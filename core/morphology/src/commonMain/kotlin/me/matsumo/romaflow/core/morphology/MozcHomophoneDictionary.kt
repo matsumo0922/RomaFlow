@@ -5,7 +5,7 @@ import kotlin.concurrent.Volatile
 /**
  * Mozc OSS 辞書を素材にした [HomophoneDictionary] 実装。
  *
- * [IpadicHomophoneDictionary] と同じく「読み→表層候補」の逆引き index を1回だけ構築してキャッシュするが、
+ * 従来の IPADIC 実装と同じく「読み→表層候補」の逆引き index を1回だけ構築してキャッシュするが、
  * Mozc は reading が既に hiragana のためカタカナ正規化は防御的に通すだけになる。index 構築は重い
  * （~1.29M 件）ため [lazyIndex] を `by lazy` とし [ensureReady] からのみ走らせる。[indexProvider] は
  * [lazyIndex] のクロージャ内だけで参照し property 保持しないため、構築完了後にエントリ列が GC 可能になる。
@@ -50,7 +50,7 @@ class MozcHomophoneDictionary private constructor(
          * 1 つの読みに対して保持する表層候補数の上限。
          *
          * 候補窓を無闇に膨らませないための cap。低頻度（高 wcost）まで含めると候補が膨大になる読みが
-         * あるため、出現しやすい上位（単語コスト昇順）のみを残す。[IpadicHomophoneDictionary] と同値。
+         * あるため、出現しやすい上位（単語コスト昇順）のみを残す。IPADIC 実装と同値。
          */
         const val MAX_CANDIDATES_PER_READING = 30
 
@@ -87,11 +87,11 @@ class MozcHomophoneDictionary private constructor(
         /**
          * [reading] をひらがなに正規化したキーを返す。
          *
-         * Mozc の reading は hiragana だが、堅牢性のためカタカナ（[IpadicReadingLexicon.katakanaToHiragana]）も
+         * Mozc の reading は hiragana だが、堅牢性のためカタカナ（[ReadingNormalizer.katakanaToHiragana]）も
          * ひらがな化して引数 reading と辞書側で同じ正規化を通す。
          */
         internal fun normalizeReadingKey(reading: String): String {
-            return IpadicReadingLexicon.katakanaToHiragana(reading)
+            return ReadingNormalizer.katakanaToHiragana(reading)
         }
 
         private fun groupConvertibleEntriesByReadingKey(entries: List<LexemeEntry>): Map<String, List<LexemeEntry>> {
