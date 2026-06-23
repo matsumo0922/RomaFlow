@@ -3,8 +3,6 @@ package me.matsumo.romaflow.core.ime
 import kotlinx.coroutines.runBlocking
 import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankRequest
 import me.matsumo.romaflow.core.ime.shadow.FactorizedRerankResult
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -26,8 +24,8 @@ import kotlin.test.assertTrue
 @Suppress("FunctionNaming")
 class RomaFlowEngineFactorizedIntegrationTest {
 
-    private val lexicon by lazy { IpadicReadingLexicon() }
-    private val costProvider by lazy { MomijiConnectionCostProvider.load() }
+    private val lexicon by lazy { MozcTestDictionary.readingLexicon }
+    private val costProvider by lazy { MozcTestDictionary.costProvider }
 
     /**
      * 回帰テスト主役: `べんきょうしてせいかをあげた` が Fake decisions で `勉強して成果を上げた` になること。

@@ -1,8 +1,6 @@
 package me.matsumo.romaflow.core.ime
 
 import kotlinx.coroutines.runBlocking
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -20,8 +18,8 @@ import kotlin.test.assertTrue
 @Suppress("FunctionNaming")
 class RomaFlowEngineRerankIntegrationTest {
 
-    private val lexicon by lazy { IpadicReadingLexicon() }
-    private val costProvider by lazy { MomijiConnectionCostProvider.load() }
+    private val lexicon by lazy { MozcTestDictionary.readingLexicon }
+    private val costProvider by lazy { MozcTestDictionary.costProvider }
 
     /**
      * rerank が -1（失敗）を返したとき Viterbi 1位（辞書 rank-0）の表層で変換されることを確認する。

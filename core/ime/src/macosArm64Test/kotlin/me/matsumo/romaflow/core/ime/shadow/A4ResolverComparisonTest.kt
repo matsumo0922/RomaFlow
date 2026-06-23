@@ -15,11 +15,8 @@ import me.matsumo.romaflow.core.ime.RerankRequest
 import me.matsumo.romaflow.core.ime.WordCandidateRequest
 import me.matsumo.romaflow.core.ime.defaultConversionProvider
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
-import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
 import platform.posix.getenv
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -55,11 +52,11 @@ import kotlin.time.TimeSource
  */
 class A4ResolverComparisonTest {
 
-    // RomaFlowEngine と同じ composite lexicon（literal fallback 付き）を使う。
-    // raw IpadicReadingLexicon だと ASCII_DIGIT_SYMBOL / PROPER_NOUN の OOV に literal arc が無く、
+    // RomaFlowEngine と同じ composite lexicon（literal fallback 付き・[LiteralContextIds.Mozc]）を使う。
+    // raw lexicon だと ASCII_DIGIT_SYMBOL / PROPER_NOUN の OOV に literal arc が無く、
     // graph 無効 → 未変換で「正解」と数えたり literal 提案を不当に拒否したりして metrics が production を反映しない。
-    private val lexicon by lazy { buildReadingLexiconWithFallback(IpadicReadingLexicon()) }
-    private val costProvider by lazy { MomijiConnectionCostProvider.load() }
+    private val lexicon by lazy { me.matsumo.romaflow.core.ime.MozcTestDictionary.compositeLexicon }
+    private val costProvider by lazy { me.matsumo.romaflow.core.ime.MozcTestDictionary.costProvider }
 
     /**
      * A-4 Fake 評価: FakeDeterministicResolver + ProposalApplier が実辞書で正しく動作することを確認する。

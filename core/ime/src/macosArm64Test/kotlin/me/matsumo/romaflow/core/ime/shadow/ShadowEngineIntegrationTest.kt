@@ -1,7 +1,5 @@
 package me.matsumo.romaflow.core.ime.shadow
 
-import me.matsumo.romaflow.core.morphology.IpadicReadingLexicon
-import me.matsumo.romaflow.core.morphology.MomijiConnectionCostProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,7 +9,7 @@ import kotlin.test.assertTrue
 /**
  * shadow エンジンの統合テスト（macosArm64）。
  *
- * 実 IPADIC 辞書と Momiji 連接コスト行列を使い、A-3 の主要フローを検証する。
+ * 実 Mozc 辞書と Mozc 連接コスト行列を使い、A-3 の主要フローを検証する。
  *
  * - てんき の N-best に 天気・転機 が含まれること（§7 verified path 切り替え）
  * - かなへの revert が正しく動作すること（converted revert）
@@ -21,8 +19,8 @@ import kotlin.test.assertTrue
  */
 class ShadowEngineIntegrationTest {
 
-    private val lexicon by lazy { IpadicReadingLexicon() }
-    private val costProvider by lazy { MomijiConnectionCostProvider.load() }
+    private val lexicon by lazy { me.matsumo.romaflow.core.ime.MozcTestDictionary.readingLexicon }
+    private val costProvider by lazy { me.matsumo.romaflow.core.ime.MozcTestDictionary.costProvider }
 
     private fun buildEngine(): ShadowCompositionEngine {
         return ShadowCompositionEngine(
