@@ -4,7 +4,7 @@ package me.matsumo.romaflow.core.ime
  * Android/JVM: classpath（packaged resource）上の Mozc compact binary を読み込む。
  *
  * `:core:ime` の build が `mozc/mozc_dict.bin` / `mozc/mozc_matrix.bin` を JVM/Android variant の
- * resource として同梱する。`mecab-ipadic/*` の classpath ロードと同様、ClassLoader 経由で取得する。
+ * resource として同梱する。`mecab-ipadic/` 配下の classpath ロードと同様、ClassLoader 経由で取得する。
  *
  * NOTE: 現状 Android には IME（InputMethodService）の本番 consumer が存在せず、この actual は将来の
  * Android IME 配線に備えた forward-looking 実装。実機での読み込みは Android IME 実装時に検証する。

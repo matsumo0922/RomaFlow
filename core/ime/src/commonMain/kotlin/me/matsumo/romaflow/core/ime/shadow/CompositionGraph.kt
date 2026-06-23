@@ -4,6 +4,7 @@ import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.LexemeEntry
 import me.matsumo.romaflow.core.morphology.ReadingLatticeDecoder
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
+import kotlin.jvm.JvmInline
 
 /**
  * shadow エンジンが保持する reading lattice グラフ。
@@ -37,7 +38,9 @@ internal class CompositionGraph private constructor(
      * 経路を識別する値クラス。
      *
      * 値は cost 昇順の rank インデックス（0 = 最安経路）。
+     * Android/JVM target は `@JvmInline` を要求するため明示する（K/N は不要だが共通化のため付与）。
      */
+    @JvmInline
     value class PathId(val rank: Int)
 
     /** 利用可能な全 [PathId] のリスト（rank 昇順）。 */
