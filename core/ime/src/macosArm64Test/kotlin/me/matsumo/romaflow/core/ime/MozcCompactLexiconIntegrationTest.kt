@@ -37,10 +37,10 @@ import kotlin.test.assertTrue
  * `ru_maxrss` は **プロセス単位の単調増加ピーク**。[EntryListReadingLexicon]（616MB）を構築する
  * parity テストと同一プロセスで RSS を測ると汚染されるため、以下の 2 メソッドを完全に分離する。
  *
- * - [measuresCompactLexiconRssWithoutEntryListContamination]: RSS 計測専用。
+ * - [reportsCompactLexiconRssAndCategoryBaselines]: RSS 計測専用。
  *   [MozcCompactLexicon] のみを構築し、EntryListReadingLexicon 経路を踏まない。
- *   同一テストバイナリ内で先に EntryListReadingLexicon が構築されると汚染されるため、
- *   このテストの数値は absolute で解釈し、delta は「このテストクラス内の baseline から」とする。
+ *   同一テストバイナリ内で先に EntryListReadingLexicon が構築されると ru_maxrss が汚染されるため、
+ *   数値は delta（このメソッド内の baseline から compact lexicon 構築後の増分）で評価する。
  *
  * - [fullCorpusParityWithEntryListLexicon]: full-corpus parity（差分ゼロ検証）専用。
  *   EntryListReadingLexicon を構築するが RSS は計測しない。
@@ -52,17 +52,16 @@ class MozcCompactLexiconIntegrationTest {
     // ---- RSS 計測テスト（EntryListLexicon 経路を踏まない・隔離） ----
 
     /**
-     * [MozcCompactLexicon] のみで全カテゴリの metrics を実行し、RSS を計測する。
+     * [MozcCompactLexicon] のみで全カテゴリの metrics を実行し、RSS delta を計測する。
      *
-     * U2a（EntryListReadingLexicon: ~616MB）との比較材料を出力するが、
-     * 同一プロセス内で EntryList が先に走ると汚染されるため、
-     * 数値の delta は「このメソッド内の baseline からの増分」として解釈すること。
-     *
-     * 緩い上限（300MB）は目標（≪200MB）より余裕を持たせる。
+     * このメソッドは EntryListReadingLexicon を構築しない。ru_maxrss は単調増加ピークのため、
+     * 同一プロセス内で他テストが先に EntryList（~616MB）を構築すると absolute が汚染される。
+     * そのため数値は「このメソッドの baseline から compact lexicon 構築後の増分（delta）」で評価する。
+     * delta アサートの上限は 400MB（目標 ≪200MB に対し余裕を持たせた値）。
      */
     @OptIn(ExperimentalForeignApi::class)
     @Test
-    fun measuresCompactLexiconRssWithoutEntryListContamination() {
+    fun reportsCompactLexiconRssAndCategoryBaselines() {
         val beforeLoadRssBytes = currentMaxResidentBytes()
 
         val dictBytes = readFileBytes(MozcGeneratedDictionaryPaths.DICTIONARY_BINARY_PATH)
@@ -77,7 +76,7 @@ class MozcCompactLexiconIntegrationTest {
         val loadDeltaMb = (afterLoadRssBytes - beforeLoadRssBytes).toDouble() / BYTES_PER_MB
         val absoluteMb = afterLoadRssBytes.toDouble() / BYTES_PER_MB
 
-        println("=== MozcCompactLexicon RSS（U2c, EntryList 汚染なし）===")
+        println("=== MozcCompactLexicon RSS（U2c, delta 評価）===")
         println("baseline=${beforeLoadRssBytes / BYTES_PER_MB.toLong()}MB absolute=${absoluteMb.toInt()}MB delta=${loadDeltaMb.toInt()}MB")
 
         // 全カテゴリ metrics（U2a と同一数値アサート）
@@ -86,7 +85,7 @@ class MozcCompactLexiconIntegrationTest {
         // RSS delta アサート。
         // absolute は同一プロセス内の他テスト（EntryListReadingLexicon 等）による汚染を受けるため delta で評価する。
         // 目標: compact lexicon が追加で使う delta ≪ 200MB（dictBytes 52MB + index ~20MB + overhead）。
-        // 上限は 400MB と余裕を持たせる（sorted index + NKotlin runtime overhead を含む）。
+        // 上限は 400MB と余裕を持たせる（sorted index + Kotlin Native runtime overhead を含む）。
         assertTrue(
             loadDeltaMb < RSS_DELTA_UPPER_BOUND_MB,
             "compact 経路の RSS delta が上限 ${RSS_DELTA_UPPER_BOUND_MB}MB を超えた: delta=${loadDeltaMb.toInt()}MB absolute=${absoluteMb.toInt()}MB",
