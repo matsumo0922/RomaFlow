@@ -4,6 +4,7 @@ import me.matsumo.romaflow.core.ime.CompositionSource
 import me.matsumo.romaflow.core.ime.RomajiKanaConverter
 import me.matsumo.romaflow.core.morphology.ConnectionCostProvider
 import me.matsumo.romaflow.core.morphology.LexemeEntry
+import me.matsumo.romaflow.core.morphology.LiteralContextIds
 import me.matsumo.romaflow.core.morphology.ReadingLexicon
 import me.matsumo.romaflow.core.morphology.buildReadingLexiconWithFallback
 
@@ -117,7 +118,7 @@ internal class ShadowCompositionEngine(
             return state
         }
 
-        val compositeLexicon = buildReadingLexiconWithFallback(lexicon)
+        val compositeLexicon = buildReadingLexiconWithFallback(lexicon, LiteralContextIds.Mozc)
 
         val pinnedConstraint = state.pinnedConstraint
         val tailReading = if (pinnedConstraint.hasLockedPrefix) {
