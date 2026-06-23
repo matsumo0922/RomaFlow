@@ -22,14 +22,14 @@ class MozcHomophoneDictionaryTest {
 
     @Test
     fun returnsEmptyBeforeEnsureReady() {
-        val dictionary = MozcHomophoneDictionary { listOf(lexemeOf("以下", "いか", 1801)) }
+        val dictionary = MozcHomophoneDictionary.fromEntries { listOf(lexemeOf("以下", "いか", 1801)) }
 
         assertTrue(dictionary.homophoneCandidates("いか").isEmpty())
     }
 
     @Test
     fun returnsSurfacesSortedByWcostAfterReady() {
-        val dictionary = MozcHomophoneDictionary {
+        val dictionary = MozcHomophoneDictionary.fromEntries {
             listOf(
                 lexemeOf("医科", "いか", 5631),
                 lexemeOf("以下", "いか", 1801),
@@ -44,7 +44,7 @@ class MozcHomophoneDictionaryTest {
 
     @Test
     fun keepsKatakanaSurfaceButExcludesPassthrough() {
-        val dictionary = MozcHomophoneDictionary {
+        val dictionary = MozcHomophoneDictionary.fromEntries {
             listOf(
                 lexemeOf("アアルト", "ああると", 7129),
                 lexemeOf("ああると", "ああると", 8000),
@@ -58,7 +58,7 @@ class MozcHomophoneDictionaryTest {
 
     @Test
     fun normalizesKatakanaQueryToHiraganaKey() {
-        val dictionary = MozcHomophoneDictionary { listOf(lexemeOf("以下", "いか", 1801)) }
+        val dictionary = MozcHomophoneDictionary.fromEntries { listOf(lexemeOf("以下", "いか", 1801)) }
 
         dictionary.ensureReady()
 
