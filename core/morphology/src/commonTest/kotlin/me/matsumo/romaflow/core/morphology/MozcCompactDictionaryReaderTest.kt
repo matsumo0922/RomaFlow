@@ -68,6 +68,30 @@ class MozcCompactDictionaryReaderTest {
     }
 
     @Test
+    fun rejectsMatrixWithOversizedDimensionBeforeAllocating() {
+        val builder = ByteListBuilder()
+
+        builder.putMagic("MZM1")
+        builder.putInt32(46_340) // 46340^2 は Int.MAX 未満だが残バイトと不一致＝確保前に弾く
+
+        assertFailsWith<IllegalArgumentException> {
+            MozcCompactDictionaryReader.readConnectionCostProvider(builder.toByteArray())
+        }
+    }
+
+    @Test
+    fun rejectsDictionaryWithOversizedCountBeforeAllocating() {
+        val builder = ByteListBuilder()
+
+        builder.putMagic("MZD1")
+        builder.putInt32(Int.MAX_VALUE)
+
+        assertFailsWith<IllegalArgumentException> {
+            MozcCompactDictionaryReader.readEntries(builder.toByteArray())
+        }
+    }
+
+    @Test
     fun preservesMultiByteUtf8Readings() {
         val entries = listOf(
             LexemeEntry(surface = "ヴァイオリン", reading = "う゛ぁいおりん", lcAttr = 1, rcAttr = 2, posId = 1, wcost = 9000),

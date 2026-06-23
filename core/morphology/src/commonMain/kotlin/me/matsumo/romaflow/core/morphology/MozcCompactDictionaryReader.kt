@@ -34,6 +34,9 @@ object MozcCompactDictionaryReader {
     /** i16 / u16 のバイト長。 */
     private const val INT16_BYTES = 2
 
+    /** 1 エントリの最小バイト数（readingLen + surfaceLen + lid + rid + cost、文字列 0 長時）。 */
+    private const val MIN_ENTRY_BYTES = 10
+
     /** 1 バイト分のビット幅。 */
     private const val BITS_PER_BYTE = 8
 
@@ -54,6 +57,11 @@ object MozcCompactDictionaryReader {
         val entryCount = cursor.readInt32()
 
         require(entryCount >= 0) { "エントリ数が不正です: $entryCount" }
+
+        // 確保前に残バイトで上限を検証する（壊れた count での OOM を防ぐ）。1 エントリは最低 [MIN_ENTRY_BYTES]。
+        require(entryCount.toLong() * MIN_ENTRY_BYTES <= cursor.remaining()) {
+            "エントリ数が残バイトに対し過大です: count=$entryCount remaining=${cursor.remaining()}"
+        }
 
         val entries = ArrayList<LexemeEntry>(entryCount)
 
@@ -79,6 +87,11 @@ object MozcCompactDictionaryReader {
         val valueCount = dimension.toLong() * dimension.toLong()
 
         require(valueCount <= Int.MAX_VALUE) { "連接行列が大きすぎます: dim=$dimension" }
+
+        // 確保前に残バイトが dim² 個の i16 と厳密一致することを検証する（過大 dim での OOM を防ぐ）。
+        require(valueCount * INT16_BYTES == cursor.remaining().toLong()) {
+            "連接行列のサイズが残バイトと不一致: dim=$dimension remaining=${cursor.remaining()}"
+        }
 
         val costs = ShortArray(valueCount.toInt())
 
@@ -151,6 +164,8 @@ object MozcCompactDictionaryReader {
                 "compact binary に余剰バイトがあります: offset=$offset size=${bytes.size}"
             }
         }
+
+        fun remaining(): Int = bytes.size - offset
 
         private fun readLittleEndian(byteCount: Int): Int {
             requireAvailable(byteCount)

@@ -74,7 +74,7 @@ class MozcDictionaryMetricsTest {
         println("literalFallbackArcRate=${formatRate(literalRate)}")
 
         assertEquals(EXPECTED_DICT_ENTRIES, entries.size, "bundled 辞書件数が pin と一致すること")
-        assertNormalCategoryReproducesBaseline(reports)
+        assertCategoryBaselines(reports)
     }
 
     private fun evaluateAllCategories(lexicon: ReadingLexicon, costProvider: ConnectionCostProvider): List<CategoryReport> {
@@ -164,14 +164,31 @@ class MozcDictionaryMetricsTest {
         return literalArcs.toDouble() / totalArcs.toDouble()
     }
 
-    private fun assertNormalCategoryReproducesBaseline(reports: List<CategoryReport>) {
-        val normal = reports.first { report -> report.name == "NORMAL" }
+    private fun assertCategoryBaselines(reports: List<CategoryReport>) {
+        val minTop1RateByCategory = mapOf(
+            "NORMAL" to NORMAL_TOP1_LOWER_BOUND,
+            "HOMOPHONE" to HOMOPHONE_TOP1_LOWER_BOUND,
+            "HOMOPHONE_HARD" to HOMOPHONE_HARD_TOP1_LOWER_BOUND,
+            "BOUNDARY_CHANGE" to BOUNDARY_TOP1_LOWER_BOUND,
+            "PROPER_NOUN" to PROPER_NOUN_TOP1_LOWER_BOUND,
+            "ASCII_DIGIT_SYMBOL" to ASCII_TOP1_LOWER_BOUND,
+        )
 
-        assertEquals(normal.total, normal.reachableCount, "NORMAL は全件 gold 到達可能であること")
+        reports.forEach { report -> assertCategoryReport(report, minTop1RateByCategory) }
 
-        val top1Rate = normal.top1CorrectCount.toDouble() / normal.total.toDouble()
+        val hardReport = reports.first { report -> report.name == "HOMOPHONE_HARD" }
 
-        assertTrue(top1Rate >= NORMAL_TOP1_LOWER_BOUND, "NORMAL baseline top-1 が下限を満たすこと（actual=$top1Rate）")
+        assertTrue(hardReport.tieCount >= 1, "HOMOPHONE_HARD に cost タイが存在すること（PR-D 要否の根拠）")
+    }
+
+    private fun assertCategoryReport(report: CategoryReport, minTop1RateByCategory: Map<String, Double>) {
+        val minTop1Rate = minTop1RateByCategory[report.name] ?: return
+
+        assertEquals(report.total, report.reachableCount, "${report.name} は全件 gold 到達可能であること")
+
+        val top1Rate = report.top1CorrectCount.toDouble() / report.total.toDouble()
+
+        assertTrue(top1Rate >= minTop1Rate, "${report.name} baseline top-1 が下限 $minTop1Rate を満たすこと（actual=$top1Rate）")
     }
 
     private fun printCategoryReport(report: CategoryReport) {
@@ -243,6 +260,21 @@ class MozcDictionaryMetricsTest {
 
         /** NORMAL baseline top-1 の下限（U1 計測 100% に対し回帰検出用の緩い下限）。 */
         private const val NORMAL_TOP1_LOWER_BOUND = 0.80
+
+        /** HOMOPHONE baseline top-1 の下限（U1 計測 72%）。 */
+        private const val HOMOPHONE_TOP1_LOWER_BOUND = 0.50
+
+        /** HOMOPHONE_HARD baseline top-1 の下限（U1 計測 75%）。 */
+        private const val HOMOPHONE_HARD_TOP1_LOWER_BOUND = 0.40
+
+        /** BOUNDARY_CHANGE baseline top-1 の下限（U1 計測 93%）。 */
+        private const val BOUNDARY_TOP1_LOWER_BOUND = 0.70
+
+        /** PROPER_NOUN baseline top-1 の下限（U1 計測 81%）。 */
+        private const val PROPER_NOUN_TOP1_LOWER_BOUND = 0.50
+
+        /** ASCII_DIGIT_SYMBOL baseline top-1 の下限（U1 計測 53%）。 */
+        private const val ASCII_TOP1_LOWER_BOUND = 0.30
 
         /** cost タイ検出のための N-best 件数。 */
         private const val TOP_N_FOR_TIE = 2
