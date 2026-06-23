@@ -38,6 +38,10 @@ val mozcSourcesPropertiesFile = projectDir.resolve("../morphology/mozc-dictionar
 val mozcGeneratedRoot = layout.buildDirectory.dir("generated/mozc")
 val mozcGeneratedBinDir = mozcGeneratedRoot.map { it.dir("bin") }
 val mozcGeneratedKotlinDir = mozcGeneratedRoot.map { it.dir("kotlin") }
+
+// U2b: 生成した Mozc compact binary を JVM/Android variant の classpath リソース（`mozc/` 配下）として
+// 同梱するための staging ディレクトリ。`MozcBundleLoader.android` が getResourceAsStream で読む。
+val mozcGeneratedResourceDir = mozcGeneratedRoot.map { it.dir("resources") }
 val mozcDownloadCacheDir = gradle.gradleUserHomeDir.resolve("caches/romaflow-mozc")
 
 val generateMozcDictionary = tasks.register("generateMozcDictionary") {
@@ -55,6 +59,19 @@ val generateMozcDictionary = tasks.register("generateMozcDictionary") {
     doLast {
         generateMozcCompactBinaries(sourcesFile, binDir, kotlinDir, cacheDir)
     }
+}
+
+// U2b: 生成済み `mozc_dict.bin` / `mozc_matrix.bin` を classpath リソース（`mozc/` 配下）へ複製する。
+// JVM/Android variant の resources に登録し、Android（`MozcBundleLoader.android`）が getResourceAsStream で読む。
+val stageMozcAndroidResources = tasks.register<Copy>("stageMozcAndroidResources") {
+    description = "Stage generated Mozc compact binaries as classpath resources under mozc/."
+
+    dependsOn(generateMozcDictionary)
+
+    from(mozcGeneratedBinDir) {
+        include("mozc_dict.bin", "mozc_matrix.bin")
+    }
+    into(mozcGeneratedResourceDir.map { it.dir("mozc") })
 }
 
 kotlin {
@@ -81,8 +98,14 @@ kotlin {
             implementation(libs.ktor.serialization.json)
         }
 
-        androidMain.dependencies {
-            implementation(libs.ktor.okhttp)
+        androidMain {
+            dependencies {
+                implementation(libs.ktor.okhttp)
+            }
+
+            // U2b: 同梱 Mozc binary を Android variant の classpath リソース（`mozc/` 配下）へ載せる。
+            // staging task を builtBy に指定し、リソース収集前に生成・複製を走らせる。
+            resources.srcDir(files(mozcGeneratedResourceDir).builtBy(stageMozcAndroidResources))
         }
 
         macosArm64Main.dependencies {

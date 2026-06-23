@@ -77,6 +77,21 @@ targets:
     dependencies:
       - sdk: InputMethodKit.framework
       - sdk: Carbon.framework
+    preBuildScripts:
+      # U2b: 同梱 Mozc compact binary を生成し、IME bundle の Resources へ複製する。
+      # KmpLinkedMacTarget の "Embed Swift Export" より後に走り、生成済み binary を bundle に載せる。
+      # binary は build 配下＝git 管理外なので、XcodeGen 時点では存在せずビルド時に生成・複製する。
+      - name: Embed Mozc Dictionary
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          cd "$SRCROOT/.."
+          ./gradlew --no-daemon :core:ime:generateMozcDictionary
+          MOZC_BIN_DIR="$SRCROOT/../core/ime/build/generated/mozc/bin"
+          RESOURCES_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "$RESOURCES_DIR"
+          cp -f "$MOZC_BIN_DIR/mozc_dict.bin" "$RESOURCES_DIR/mozc_dict.bin"
+          cp -f "$MOZC_BIN_DIR/mozc_matrix.bin" "$RESOURCES_DIR/mozc_matrix.bin"
     settings:
       base:
         # macOS は bundle ID にドット区切りの "inputmethod" セグメントが含まれるものだけを IME として認識する
